@@ -1,0 +1,42 @@
+---
+title: "Binned Analysis"
+author: "Emanuele Coradin"
+date: "`r Sys.Date()`"
+output: 
+  read_document: rmdformats::readthedown
+  pdf_document:
+    number_sections: true
+    toc: true
+    toc_depth: 2
+  html_document:
+    number_sections: true
+    theme: spacelab
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+color_vector <- c("#CC0000",   # Dark red
+                  "#CC79A7",   # Muted purple
+                  "#D55E00",   # Vermilion
+                  "#009E73",   # Bluish green
+                  "#56B4E9",   # Sky blue
+                  '#000046',   # Deep Blue
+                  "#DB1E60",   # Pinkish-red
+                  "#E69F00")   # Yellow-orange
+
+```
+
+```{r, message=FALSE, echo=FALSE}
+
+```
+
+# Bayesian analysis of the $\mu^+$ and $\mu^-$ lifetime in aluminum
+
+## Introduction
+
+The goal of this project is to obtain the lifetimes of positive and negative muons in aluminium. The given dataset contains the time passed between the implantation of the muon and its decay. 
+
+Here I'm presenting a conventional kind of analysis, by building an histogram and then fitting it with a curve (in this case two exponentials plus a constant background). The value of the parameters will be then inferred by using bayesian inference on the poissonian likelihood of the fit (binned analysis).
+
+

@@ -1,0 +1,42 @@
+---
+title: "Unbinned Analysis"
+author: "Emanuele Coradin"
+date: "`r Sys.Date()`"
+output: 
+  read_document: rmdformats::readthedown
+  pdf_document:
+    number_sections: true
+    toc: true
+    toc_depth: 2
+  html_document:
+    number_sections: true
+    theme: spacelab
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+color_vector <- c("#CC0000",   # Dark red
+                  "#CC79A7",   # Muted purple
+                  "#D55E00",   # Vermilion
+                  "#009E73",   # Bluish green
+                  "#56B4E9",   # Sky blue
+                  '#000046',   # Deep Blue
+                  "#DB1E60",   # Pinkish-red
+                  "#E69F00")   # Yellow-orange
+
+```
+
+```{r, message=FALSE, echo=FALSE}
+
+```
+
+# Bayesian analysis of the $\mu^+$ and $\mu^-$ lifetime in aluminum
+
+## Introduction
+
+The goal of this project is to obtain the lifetimes of positive and negative muons in aluminium. The given dataset contains the time passed between the implantation of the muon and its decay. 
+
+In this document I'm exploring the following idea: 
+we have three possible kinds of event, decay of either positive or negative muon or a background event. The first two will follow an exponential distribution, even though having different decay constants, while the background follows a uniform distribution. A weighted average of them will give the distribution of the data.  In this way it is possible to avoid the construction of an histogram (unbinned analysis).
+
