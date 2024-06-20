@@ -1,0 +1,369 @@
+---
+title: "Untitled0"
+author: "Emanuele Coradin"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE}
+library(rjags)
+library(ggplot2)
+library(rstan)
+library(bayesplot)
+```
+
+```{r}
+# Read files
+paths_lifetime <- dir('g-2data/data/lifetime/2023_24', pattern ='^t', full.names=TRUE)
+paths_precession <- dir('g-2data/data/precession/2023_24', full.names=TRUE)
+
+data_lifetime <- numeric()
+data_precession <- numeric()
+
+for (path in paths_lifetime) {
+  data_lifetime <- c(data_lifetime, as.numeric(readLines(path)))
+}
+
+for (path in paths_precession) {
+  data_precession <- c(data_precession, as.numeric(readLines(path)))
+}
+
+cat('Length data_lifetime =', length(data_lifetime), '\n')
+cat('Length data_precession =', length(data_precession), '\n')
+
+# Calibrate data
+p0 <- 7.4
+sigma_p0 <- 4.4
+p1 <- 14.90
+sigma_p1 <- 0.11
+
+calibrate <- function(x) (p0 + p1 * x) * 1e-3
+
+data_lifetime <- calibrate(data_lifetime)
+data_precession <- calibrate(data_precession)
+
+# Cleaning the dataset
+data_lifetime <- data_lifetime[data_lifetime > 0 & data_lifetime < 5]
+data_precession <- data_precession[data_precession > 0 & data_precession < 5]
+
+```
+
+```{r}
+bins_default <- 40
+
+plotdata <- function(data, name, scale='lin', bins=bins_default) {
+  if (scale == 'log') {
+    data <- log(data)
+  }
+  histdata <- hist(data, breaks=bins, plot=FALSE)
+  
+  # Filter bins with counts greater than 15
+  filtered_histdata <- data.frame(mids = histdata$mids, counts = histdata$counts)
+  filtered_histdata <- filtered_histdata[filtered_histdata$counts > 15, ]
+  
+  p <- ggplot() + theme_minimal() +
+    geom_point(data = filtered_histdata, aes(x = mids, y = counts), color='blue', size=1)
+  
+  if (scale == 'lin') {
+    p <- p + labs(x = name, y = 'counts') + scale_y_log10()
+  } else {
+    p <- p + labs(x = paste('log', name), y = 'counts')
+  }
+  
+  p
+}
+
+plotdata(data_lifetime, 'lifetime', 'lin', 40)
+plotdata(data_precession, 'precession', 'lin', 40)
+
+cat('After dropping the initial transient\n\tLength data_lifetime =', length(data_lifetime), '\n')
+cat('\tLength data_precession =', length(data_precession), '\n')
+
+```
+
+
+## Analysis with stan
+
+```{r}
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+
+dataList <- list(N = length(data_precession), time = data_precession)
+
+modelString <- "
+data {
+  int<lower=0> N;
+  real<lower=0> time[N];
+}
+
+parameters {
+  real<lower=1.5, upper=3> tau;
+  real<lower=-1/3, upper=1> alfa;
+  real<lower=3, upper=6> omega;
+  real<lower=-pi()/2, upper=pi()/2> delta;
+}
+
+model {
+  vector[N] log_lik;
+  for (i in 1:N) {
+    log_lik[i] = log(exp(-time[i] / tau) * (1 + alfa * cos(omega * time[i] + delta)));
+  }
+  target += sum(log_lik);
+
+  // Priors
+  //tau ~ gamma(0.001, 0.001);
+  //c ~ normal(0, 10);
+  //alfa ~ normal(0, 1);
+  //omega ~ normal(4.5, 1);
+  //delta ~ uniform(-pi()/2, pi()/2);
+}
+"
+
+stanDso <- stan_model(model_code = modelString)
+
+
+```
+
+
+```{r}
+init_values <- list(tau = 2.,
+                    alfa = 1/3,
+                    omega = 4.8,
+                    delta = 0)
+
+stanFit <- sampling(object = stanDso, 
+                    data = dataList, 
+                    chains = 2, 
+                    iter = 1000, 
+                    warmup = 100, 
+                    thin = 1,
+                    init = list(init_values, init_values), 
+                    control = list(adapt_delta = 0.8, max_treedepth = 10))  # Use "0" for faster convergence
+stanPosterior <- as.array(stanFit)
+```
+
+```{r}
+# Inspecting the chains
+inspect_chains <- function(stanFit, stanPosterior, parameter){
+  rstan :: traceplot (stanFit ,pars=c(parameter)) + 
+    theme_minimal() +
+    labs(title = paste("Trace Plot of ", parameter),
+         x = "Iteration",
+         y = parameter) 
+  
+  mcmcCoda <- mcmc.list( lapply (1:ncol( stanFit ), function (x) { mcmc(stanPosterior[,x ,]) }))
+  autocorr.plot(mcmcCoda)
+  
+  # Default plots of the posterior
+  
+  color_scheme_set("red")
+  
+  density_plot <- plot(stanFit ,pars=c(parameter))+ 
+    theme_minimal() +
+    labs(title = paste("Posterior Density of ", parameter),
+         x = parameter,
+         y = "Density")
+  print(density_plot)
+  
+  areas_plot <- mcmc_areas(stanPosterior, pars=c(parameter), point_est = 'mean', prob = 0.95)+
+    theme_minimal() +
+    labs(title = paste("Posterior Distribution of ", parameter),
+         x = parameter,
+         y = "Density")
+  print(areas_plot)
+  
+  hist_plot <- mcmc_hist(stanPosterior, pars=c(parameter)) +
+    theme_minimal() +
+    labs(title = paste("Posterior Histogram of ", parameter),
+         x = parameter,
+         y = "Frequency")
+  print(hist_plot)
+  
+  # --------------- write output ------------------
+  lambda_summary <- summary(stanFit, pars = parameter)$summary
+  
+  lambda_mean <- lambda_summary[parameter, "mean"]
+  lambda_sd <- lambda_summary[parameter, "sd"]
+  lambda_cred_int <- lambda_summary[parameter, c("2.5%", "97.5%")]
+  
+  writeLines(sprintf('
+    Mean of %s: %.3f
+    SD of %s: %.3f
+    95%% credibility interval: [ %.3f , %.3f ]',
+    parameter,lambda_mean, parameter, lambda_sd, lambda_cred_int[1], lambda_cred_int[2]
+  ))
+}
+```
+```{r}
+#inspect_chains(stanFit, stanPosterior, "tau")
+summary(stanFit)
+
+```
+
+```{r}
+inspect_chains(stanFit, stanPosterior, "omega")
+```
+
+```{r}
+inspect_chains(stanFit, stanPosterior, "tau")
+```
+
+```{r}
+inspect_chains(stanFit, stanPosterior, "alfa")
+```
+
+```{r}
+inspect_chains(stanFit, stanPosterior, "delta")
+```
+
+
+## JAGS attempt
+
+```{r}
+zeros <- rep(0, length(data_precession))
+dataList <- list(N = length(data_precession), time = data_precession, zeros=zeros)
+
+# Write JAGS model
+modelString <- "
+  
+  model {
+    C <- 10000
+    for (i in 1:N) {
+      zeros[i] ~ dpois(zeros.mean[i])
+      zeros.mean[i] <- -L[i] + C
+      L[i] <- log(exp(-time[i] / tau) * (1 + alfa * cos(omega * time[i] + delta)))
+  }
+
+  # Priors
+  tau ~ dunif(1.5, 3)
+  alfa ~ dunif(-1/3, 1)
+  omega ~ dunif(3, 6)
+  delta ~ dunif(-3.14/2, 3.14/2)
+}
+"
+
+# Save the model string to a file
+writeLines(modelString, con = "model.jags")
+
+# Set initial values and parameters to monitor
+inits <- function() {
+  list(c = runif(1, 0, 10), 
+       tau = runif(1, 1.5, 3), 
+       alfa = runif(1, -1/3, 1), 
+       omega = runif(1, 3, 6), 
+       delta = runif(1, -pi/2, pi/2)
+  )
+}
+
+parameters <- c("tau", "alfa", "omega", "delta")
+```
+```{r}
+# Run the model
+jagsModel <- jags.model(file = "model.jags", 
+                        data = dataList, 
+                        n.chains = 2, 
+                        n.adapt = 1000)
+
+jagsSamples <- coda.samples(model = jagsModel, 
+                            variable.names = parameters, 
+                            n.iter = 2000)
+
+# Summarize and inspect results
+library(coda)
+summary(jagsSamples)
+```
+
+```{r plot-jags, fig.width=10, fig.height=8}
+#X11(width = 10, height = 8)
+
+plot(jagsSamples)
+```
+
+```{r}
+posterior_matrix <- as.matrix(jagsSamples)
+# Retrieve the chains
+tau_samples <- posterior_matrix[, "tau"]
+delta_samples <- posterior_matrix[, "delta"]
+omega_samples <- posterior_matrix[, "omega"]
+alfa_samples <- posterior_matrix[, "alfa"]
+
+
+par(mfrow = c(3, 2))
+
+acf(tau_samples, main = "Autocorrelation of tau")
+acf(delta_samples, main = "Autocorrelation of delta")
+acf(omega_samples, main = "Autocorrelation of omega")
+acf(alfa_samples, main = "Autocorrelation of alfa")
+```
+
+
+
+## Jags on lifetime
+
+```{r}
+zeros <- rep(0, length(data_lifetime))
+dataList <- list(N = length(data_lifetime), time = data_lifetime, zeros=zeros)
+
+# Write JAGS model
+modelString <- "
+  
+  model {
+    C <- 10000
+    for (i in 1:N) {
+      zeros[i] ~ dpois(zeros.mean[i])
+      zeros.mean[i] <- -L[i] + C
+      L[i] <- log(exp(-time[i] / tau))
+  }
+
+  # Priors
+  tau ~ dunif(1.5, 3)
+}
+"
+
+# Save the model string to a file
+writeLines(modelString, con = "model.jags")
+
+# Set initial values and parameters to monitor
+inits <- function() {
+  list(
+       tau = runif(1, 1.5, 3)
+  )
+}
+
+parameters <- c("tau")
+```
+```{r}
+# Run the model
+jagsModel <- jags.model(file = "model.jags", 
+                        data = dataList, 
+                        n.chains = 2, 
+                        n.adapt = 1000)
+
+jagsSamples <- coda.samples(model = jagsModel, 
+                            variable.names = parameters, 
+                            n.iter = 2000)
+
+# Summarize and inspect results
+library(coda)
+summary(jagsSamples)
+```
+
+```{r plot-jags, fig.width=10, fig.height=8}
+#X11(width = 10, height = 8)
+
+plot(jagsSamples)
+```
+
+```{r}
+posterior_matrix <- as.matrix(jagsSamples)
+# Retrieve the chains
+tau_samples <- posterior_matrix[, "tau"]
+
+
+acf(tau_samples, main = "Autocorrelation of tau")
+
+```

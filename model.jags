@@ -1,0 +1,14 @@
+
+  
+  model {
+    C <- 10000
+    for (i in 1:N) {
+      zeros[i] ~ dpois(zeros.mean[i])
+      zeros.mean[i] <- -L[i] + C
+      L[i] <- log(exp(-time[i] / tau))
+  }
+
+  # Priors
+  tau ~ dunif(1.5, 3)
+}
+

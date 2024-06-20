@@ -39,4 +39,4 @@ The goal of this project is to obtain the lifetimes of positive and negative muo
 
 Here I'm presenting a conventional kind of analysis, by building an histogram and then fitting it with a curve (in this case two exponentials plus a constant background). The value of the parameters will be then inferred by using bayesian inference on the poissonian likelihood of the fit (binned analysis).
 
-
+## Muon Lifetimes
