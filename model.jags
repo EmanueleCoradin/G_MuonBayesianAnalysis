@@ -1,14 +1,34 @@
 
   
-  model {
-    C <- 10000
-    for (i in 1:N) {
+#model {
+#    for (i in 1:length(x)) {
+#      zeros[i] ~ dpois(zeros.mean[i])
+#      zeros.mean[i] <- -L[i]
+#      L[i] <- -x[i]/tau - log(tau)
+#    }
+#    tau ~ dunif(1.9,3)
+#}
+
+#model{
+#  for (i in 1:length(x)) {
+#    x[i] ~ dexp(1/tau)
+#  }
+
+  # Prior
+#  tau ~ dunif(1.9,3)
+#}
+
+model {
+
+  for (i in 1:length(x)) {
       zeros[i] ~ dpois(zeros.mean[i])
-      zeros.mean[i] <- -L[i] + C
-      L[i] <- log(exp(-time[i] / tau))
+      zeros.mean[i] <- -L[i]
+      L[i] <- log( fraction*exp(-x[i]/tau_plus)/tau_plus +  (1-fraction)*exp(-x[i]/tau_minus)/tau_minus)
   }
 
-  # Priors
-  tau ~ dunif(1.5, 3)
+  tau_minus ~ dunif(0.5,1.2)
+  tau_plus ~ dunif(1.9,3)
+  fraction ~  dunif(0,1)
+
 }
 
