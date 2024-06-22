@@ -43,6 +43,43 @@ The goal of this project is to obtain the lifetimes of positive and negative muo
 In this document I'm exploring the following idea: 
 we have three possible kinds of event, decay of either positive or negative muon or a background event. The first two will follow an exponential distribution, even though having different decay constants, while the background follows a uniform distribution. A weighted average of them will give the distribution of the data.  In this way it is possible to avoid the construction of an histogram (unbinned analysis).
 
+## Useful functions
+
+```{r functions}
+getGammaParam <- function(mean, variance) {
+  beta <- mean / variance
+  alpha <- mean * beta
+  c(alpha = alpha, beta = beta)
+}
+
+getBetaParam <- function(mean, variance) {
+  nu <- mean * (mean * (1 - mean) / variance - 1)
+  alpha <- mean * nu
+  beta <- nu * (1 - mean)
+  c(alpha = alpha, beta = beta)
+}
+
+prior_moments <- c(
+  tau_mean = 2.1,
+  tau_var = 0.05^2,
+  alpha_mean = 1/3,
+  alpha_var = 0.3,
+  omega_mean = 4.77,
+  omega_var = (4.77 * 0.04)^2 / 12,
+  delta_mean = 0,
+  delta_var = 0.32
+)
+
+PriorParam <- list(
+  tau = getGammaParam(prior_moments['tau_mean'], prior_moments['tau_var']),
+  omega = getGammaParam(prior_moments['omega_mean'], prior_moments['omega_var']),
+  delta = getBetaParam((prior_moments['delta_mean'] + pi/2) / pi, prior_moments['delta_var'] * pi^-2),
+  alpha = getBetaParam((prior_moments['alpha_mean'] + 1/3) / (4/3), prior_moments['alpha_var'] / (4/3)^2)
+)
+
+PriorParam
+```
+
 ## Data Loading
 
 ```{r }
@@ -71,8 +108,8 @@ data_lifetime   <- calibrate(data_lifetime)
 data_precession <- calibrate(data_precession)
 
 # Cleaning the dataset
-#data_lifetime   <- data_lifetime[data_lifetime<8]
-#data_precession <- data_precession[data_precession<2 ]
+data_lifetime   <- data_lifetime[data_lifetime<8]
+data_precession <- data_precession[data_precession<7]
 
 ```
 
@@ -83,7 +120,7 @@ zeros <- rep(0, length(data_lifetime))
 dataList <- list(x = data_lifetime, zeros=zeros)
 
 # Write JAGS model
-modelString <- "
+modelString <- sprintf("
   
 #model {
 #    for (i in 1:length(x)) {
@@ -108,15 +145,12 @@ model {
   for (i in 1:length(x)) {
       zeros[i] ~ dpois(zeros.mean[i])
       zeros.mean[i] <- -L[i]
-      L[i] <- log( fraction*exp(-x[i]/tau_plus)/tau_plus +  (1-fraction)*exp(-x[i]/tau_minus)/tau_minus)
+      L[i] <- log((1-noise_signal)*(exp(-x[i]/tau)/tau) + noise_signal)
   }
-
-  tau_minus ~ dunif(0.5,1.2)
-  tau_plus ~ dunif(1.9,3)
-  fraction ~  dunif(0,1)
-
-}
-"
+  
+  noise_signal <- 0
+  tau ~ dgamma(%.2f, %.2f)
+}", PriorParam$tau["alpha"], PriorParam$tau["beta"])
 
 # Save the model string to a file
 writeLines(modelString, con = "model.jags")
@@ -129,13 +163,13 @@ jagsModel <- jags.model(file = "model.jags",
                         n.chains = 1, 
                         n.adapt = 100)
 
-#variable.names= c('tau_plus','tau_minus', 'fraction')
+#variable.names= c('tau','tau_minus', 'fraction')
 jagsSamples <- coda.samples(model = jagsModel, 
-                            variable.names= c('tau_plus', 'tau_minus', 'fraction'), 
-                            n.iter = 2000)
+                            variable.names= c('noise_signal', 'tau'), 
+                            n.iter = 500)
 
 # Summarize and inspect results
-parms <- summary(posterior_sample)$statistics[,'Mean']
+parms <- summary(jagsSamples)$statistics[,'Mean']
 
 summary(jagsSamples)
 ```
@@ -150,16 +184,12 @@ plot(jagsSamples)
 posterior_matrix <- as.matrix(jagsSamples)
 
 # Retrieve the chains
-tau_plus_samples <- posterior_matrix[, "tau_plus"]
-tau_minus_samples <- posterior_matrix[, "tau_minus"]
-fraction <- posterior_matrix[, "fraction"]
+tau_samples <- posterior_matrix[, "tau"]
 
 par(mfrow = c(3, 2))
 
 
-acf(tau_plus_samples, main = "Autocorrelation of tau_plus")
-acf(tau_minus_samples,  main = "Autocorrelation of tau_minus")
-acf(fraction,   main = "Autocorrelation of fraction")
+acf(tau_samples, main = "Autocorrelation of tau")
 ```
 
 
@@ -167,34 +197,34 @@ acf(fraction,   main = "Autocorrelation of fraction")
 
 ```{r}
 model_precession <- "
-
 model {
-
   for (i in 1:length(x)) {
-      zeros[i] ~ dpois(zeros.mean[i])
-      zeros.mean[i] <- -L[i]
-      L[i] <- log( fraction * exp(-x[i]/tau_plus)/tau_plus * (1+alfa*cos(omega*x[i]+delta))+ (1-fraction) * exp(-x[i]/tau_minus)/tau_minus)
+    zeros[i] ~ dpois(zeros.mean[i])
+    zeros.mean[i] <- -L[i]
+    L[i] <- -x[i]/tau + log(1+alfa*cos(omega*x[i]+delta)) - log(tau) - log(FACTOR)
   }
-
-  delta ~ dunif(-1.57,1.57)
+  
+  tau ~ dunif(1.9,3)
+  delta ~ dunif(-3.14,3.14)
   omega ~ dunif(4.2,5.2)
-  alfa ~ dnorm(1/3,1.82)
-
+  #alfa ~ dnorm(1/3,1.82)
+  alfa ~ dunif(0,1)
+  FACTOR <- 1 + alfa/(1+tau^2*omega^2) * (cos(delta)-tau*omega*sin(delta))
 }
-
 "
 
 n_burnin <- 100
-dataList = list(x = data_precession, zeros = rep(0, length(data_precession)), tau_plus = parms['tau_plus'], tau_minus = parms['tau_minus'], fraction=parms['fraction'])
+dataList = list(x = data_precession, zeros = rep(0, length(data_precession)))
 model <- jags.model(file = textConnection(model_precession), data = dataList)
 adapt(model,n_burnin)
 
-posterior_sample <- coda.samples(model, variable.names = c('delta','omega','alfa'), n.iter = 500, thin = 1)
+posterior_sample <- coda.samples(model, variable.names = c('tau', 'delta','omega','alfa'), n.iter = 500, thin = 1)
 summary(posterior_sample)
 
 posterior_matrix <- as.matrix(posterior_sample)
 # Retrieve the chains
 
+tau_samples <- posterior_matrix[, "tau"]
 delta_samples <- posterior_matrix[, "delta"]
 omega_samples <- posterior_matrix[, "omega"]
 alfa_samples <- posterior_matrix[, "alfa"]
@@ -202,10 +232,11 @@ alfa_samples <- posterior_matrix[, "alfa"]
 
 par(mfrow = c(2, 2))
 
+acf(tau_samples, main = "Autocorrelation of tau")
 acf(delta_samples, main = "Autocorrelation of delta")
 acf(omega_samples, main = "Autocorrelation of omega")
 acf(alfa_samples, main = "Autocorrelation of alfa")
 ```
-```{r }
+```{r , fig.width=10, fig.height=8}
 plot(posterior_sample)
 ```

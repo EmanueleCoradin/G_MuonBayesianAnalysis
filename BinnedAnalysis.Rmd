@@ -41,6 +41,41 @@ The goal of this project is to obtain the lifetimes of positive and negative muo
 
 Here I'm presenting a conventional kind of analysis, by building an histogram and then fitting it with a curve (in this case two exponentials plus a constant background). The value of the parameters will be then inferred by using bayesian inference on the poissonian likelihood of the fit (binned analysis).
 
+## Useful functions
+```{r functions}
+getGammaParam <- function(mean, variance) {
+  beta <- mean / variance
+  alpha <- mean * beta
+  c(alpha = alpha, beta = beta)
+}
+
+getBetaParam <- function(mean, variance) {
+  nu <- mean * (mean * (1 - mean) / variance - 1)
+  alpha <- mean * nu
+  beta <- nu * (1 - mean)
+  c(alpha = alpha, beta = beta)
+}
+
+prior_moments <- c(
+  tau_mean = 2.1,
+  tau_var = 0.05^2,
+  alpha_mean = 1/3,
+  alpha_var = 0.3,
+  omega_mean = 4.77,
+  omega_var = (4.77 * 0.04)^2 / 12,
+  delta_mean = 0,
+  delta_var = 0.32
+)
+
+PriorParam <- list(
+  tau = getGammaParam(prior_moments[['tau_mean']], prior_moments[['tau_var']]),
+  omega = getGammaParam(prior_moments[['omega_mean']], prior_moments[['omega_var']]),
+  delta = getBetaParam((prior_moments[['delta_mean']] + pi/2) / pi, prior_moments[['delta_var']] * pi^-2),
+  alpha = getBetaParam((prior_moments[['alpha_mean']] + 1/3) / (4/3), prior_moments[['alpha_var']] / (4/3)^2)
+)
+
+PriorParam
+```
 ## Data Loading
 
 ```{r }
@@ -115,10 +150,12 @@ plotdata <- function(data, name, scale='lin', bins=bins_default, plot_histbar=FA
 }
 
 
-plotdata(data_lifetime, 'lifetime', 'lin', plot_histbar = FALSE)
-plotdata(data_precession, 'precession', 'lin', plot_histbar = FALSE)
+plotdata(data_lifetime, 'lifetime', 'log', plot_histbar = FALSE)
+plotdata(data_precession, 'precession', 'log', plot_histbar = FALSE)
 ```
-
+```{r }
+prior_moments[['tau_mean']]
+```
 ```{r }
 
 lifetime_hist<-hist(data_lifetime, breaks=bins_default, plot=FALSE)
@@ -128,31 +165,32 @@ filtered_histdata <- filtered_histdata[-(1:3), ]
 x <- filtered_histdata$mids
 y <- filtered_histdata$counts
 
-n_burnin <- 2e+3 # length of the burn-in phase
-thinning <- 2
-Nrep     <- 3e+5     # number of values to simulate
+n_burnin <- 100 # length of the burn-in phase
+thinning <- 1
+Nrep     <- 500     # number of values to simulate
 
-model_lifetime <- 'model{
+# Define the model string using sprintf
+model_lifetime <- sprintf("
+model{
   # Likelihood
   for (i in 1:length(x)) {
-    I[i] <- N*( fraction * exp(-x[i]/tau_plus) + (1-fraction) * exp(-x[i]/tau_minus))+c
+    I[i] <- N*exp(-x[i]/tau)+c
     y[i] ~ dpois(I[i])
   }
 
   # Prior
   N ~ dunif(0, 3000)
   c ~ dunif(0, 10)
-  tau_minus ~ dunif(0.5,1.2)
-  tau_plus ~ dunif(1.9,3)
-  fraction <- 0.56
-}'
+  tau ~ dgamma(%.2f, %.2f)
+}", PriorParam$tau[["alpha"]], PriorParam$tau[["beta"]])
+
 
 dataList = list(x = x, y = y)
 model <- jags.model(file = textConnection(model_lifetime), data = dataList)
 
 update(model, n.adapt = n_burnin)
 
-posterior_sample <- coda.samples(model, variable.names = c('N','c','tau_plus','tau_minus', 'fraction'), n.iter = Nrep, thin = thinning)
+posterior_sample <- coda.samples(model, variable.names = c('N','c','tau'), n.iter = Nrep, thin = thinning)
 summary(posterior_sample)
 plot(posterior_sample)
 
@@ -160,26 +198,19 @@ posterior_matrix <- as.matrix(posterior_sample)
 # Retrieve the chains
 N_samples   <- posterior_matrix[, "N"]
 c_samples   <- posterior_matrix[, "c"]
-tau_plus_samples <- posterior_matrix[, "tau_plus"]
-tau_minus_samples <- posterior_matrix[, "tau_minus"]
-fraction <- posterior_matrix[, "fraction"]
+tau_samples <- posterior_matrix[, "tau"]
 par(mfrow = c(3, 2))
 
 acf(N_samples,  main = "Autocorrelation of N")
 acf(c_samples,   main = "Autocorrelation of c")
-acf(tau_plus_samples, main = "Autocorrelation of tau_plus")
-acf(tau_minus_samples,  main = "Autocorrelation of tau_minus")
-acf(fraction,   main = "Autocorrelation of fraction")
-
-
+acf(tau_samples, main = "Autocorrelation of tau")
 ```
 
 ```{r }
 attributes(summary(posterior_sample))
 parms <- summary(posterior_sample)$statistics[,'Mean']
 
-
-lifetime_law <- function(x, parms) parms['N']*(parms['fraction'] * exp(-x/parms['tau_plus']) + (1-parms['fraction']) * exp(-x/parms['tau_minus']) )+parms['c']
+lifetime_law <- function(x, parms) parms['N'] * exp(-x/parms['tau']) + parms['c']
 
 fitting<-function(law,parms,data,name, ...) {
   p<-plotdata(data, name, ...)
@@ -200,14 +231,15 @@ filtered_precession <- filtered_precession[-1, ]
 x <- filtered_precession$mids
 y <- filtered_precession$counts
 
-n_burnin <- 2e+4 # length of the burn-in phase
-thinning <- 2
-Nrep     <- 3e+5     # number of values to simulate
+n_burnin <- 100 # length of the burn-in phase
+thinning <- 1
+Nrep     <- 500     # number of values to simulate
 
-model_precession <- 'model{
+model_precession <- sprintf("
+model{
   # Likelihood
   for (i in 1:length(x)) {
-    I[i] <- N*  ( fraction * exp(-x[i]/tau_plus) * (1+alfa*cos(omega*x[i]+delta))+ (1-fraction) * exp(-x[i]/tau_minus))+c 
+    I[i] <- N*exp(-x[i]/tau) * (1+alpha*cos(omega*x[i]+delta))+c 
     y[i] ~ dpois(I[i])
   }
 
@@ -215,16 +247,23 @@ model_precession <- 'model{
   N ~ dunif(0, 15000)
   c ~ dunif(0, 100)
   
-  delta ~ dunif(-1.57,1.57)
-  omega ~ dunif(4.2,5.2)
-  alfa ~ dnorm(1/3,1.82)
-}'
-dataList = list(x = x, y = y, tau_plus = parms['tau_plus'], tau_minus = parms['tau_minus'], fraction=parms['fraction'])
+  delta_base ~ dbeta(%.2f, %.2f) 
+  omega ~ dgamma(%.2f, %.2f)
+  alpha_base ~ dbeta(%.2f, %.2f) 
+  
+  delta <- delta_base * 3.14 - 3.14/2
+  alpha <- alpha_base * 4/3 - 1/3
+  #tau ~ dgamma(%.2f, %.2f)
+}
+", PriorParam$delta["alpha"], PriorParam$delta["beta"], PriorParam$omega["alpha"], PriorParam$omega["beta"],  PriorParam$alpha["alpha"], PriorParam$alpha["beta"]
+, PriorParam$tau["alpha"], PriorParam$tau["beta"])
+
+dataList = list(x = x, y = y, tau = parms['tau'])
 model <- jags.model(file = textConnection(model_precession), data = dataList)
 adapt(model,n_burnin)
 update(model, n.iter = n_burnin)
 
-posterior_sample <- coda.samples(model, variable.names = c('N','c','delta','omega','alfa'), n.iter = Nrep, thin = thinning)
+posterior_sample <- coda.samples(model, variable.names = c('N','c','delta','omega','alpha'), n.iter = Nrep, thin = thinning)
 summary(posterior_sample)
 
 posterior_matrix <- as.matrix(posterior_sample)
@@ -233,7 +272,7 @@ N_samples  <- posterior_matrix[, "N"]
 c_samples   <- posterior_matrix[, "c"]
 delta_samples <- posterior_matrix[, "delta"]
 omega_samples <- posterior_matrix[, "omega"]
-alfa_samples <- posterior_matrix[, "alfa"]
+alpha_samples <- posterior_matrix[, "alpha"]
 
 
 par(mfrow = c(3, 2))
@@ -243,7 +282,7 @@ acf(c_samples,   main = "Autocorrelation of c")
 
 acf(delta_samples, main = "Autocorrelation of delta")
 acf(omega_samples, main = "Autocorrelation of omega")
-acf(alfa_samples, main = "Autocorrelation of alfa")
+acf(alpha_samples, main = "Autocorrelation of alpha")
 ```
 
 ```{r }
@@ -253,15 +292,12 @@ plot(posterior_sample)
 
 ```{r }
 precession_law <- function(x, parms) {
-  parms['N'] * (
-    parms['fraction'] * exp(-x / parms['tau_plus']) * 
-    (1 + parms['alfa'] * cos(parms['omega'] * x + parms['delta'])) + 
-    (1 - parms['fraction']) * exp(-x / parms['tau_minus'])
-  ) + parms['c']
+  parms['N'] * exp(-x / parms['tau']) * (1 + parms['alpha'] * cos(parms['omega'] * x + parms['delta'])) 
+  + parms['c']
 }
 
 parms_precession <- summary(posterior_sample)$statistics[,'Mean']
-parms_precession <- c(parms_precession, c(parms['tau_plus'], parms['tau_minus'], parms['fraction'])) 
+parms_precession <- c(parms_precession, parms['tau'])
 
 fitting(precession_law, parms_precession, data_precession,'precession',  bins=bins_default)
 parms_precession

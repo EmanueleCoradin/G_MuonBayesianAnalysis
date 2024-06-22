@@ -23,12 +23,10 @@ model {
   for (i in 1:length(x)) {
       zeros[i] ~ dpois(zeros.mean[i])
       zeros.mean[i] <- -L[i]
-      L[i] <- log( fraction*exp(-x[i]/tau_plus)/tau_plus +  (1-fraction)*exp(-x[i]/tau_minus)/tau_minus)
+      L[i] <- log((1-noise_signal)*(exp(-x[i]/tau_plus)/tau_plus) + noise_signal)
   }
-
-  tau_minus ~ dunif(0.5,1.2)
+  
+  noise_signal <- 0
   tau_plus ~ dunif(1.9,3)
-  fraction ~  dunif(0,1)
-
 }
 
