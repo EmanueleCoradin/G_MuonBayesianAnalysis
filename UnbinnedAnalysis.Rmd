@@ -31,7 +31,6 @@ color_vector <- c("#CC0000",   # Dark red
 library(rjags)
 library(ggplot2)
 library(dplyr)
-library(coda)
 ```
 
 # Bayesian analysis of the $\mu^+$ and $\mu^-$ lifetime in aluminum
@@ -43,7 +42,22 @@ The goal of this project is to obtain the lifetimes of positive and negative muo
 In this document I'm exploring the following idea: 
 we have three possible kinds of event, decay of either positive or negative muon or a background event. The first two will follow an exponential distribution, even though having different decay constants, while the background follows a uniform distribution. A weighted average of them will give the distribution of the data.  In this way it is possible to avoid the construction of an histogram (unbinned analysis).
 
-## Useful functions
+## Functions and default values
+
+```{r Default values}
+bins_default <- 120
+
+prior_moments <- c(
+  tau_mean = 2.1,
+  tau_var = 0.05^2,
+  alpha_mean = 1/3,
+  alpha_var = 0.3,
+  omega_mean = 4.77,
+  omega_var = (4.77 * 0.04)^2 / 12,
+  delta_mean = 0,
+  delta_var = 0.32
+)
+```
 
 ```{r functions}
 getGammaParam <- function(mean, variance) {
@@ -59,28 +73,63 @@ getBetaParam <- function(mean, variance) {
   c(alpha = alpha, beta = beta)
 }
 
-prior_moments <- c(
-  tau_mean = 2.1,
-  tau_var = 0.05^2,
-  alpha_mean = 1/3,
-  alpha_var = 0.3,
-  omega_mean = 4.77,
-  omega_var = (4.77 * 0.04)^2 / 12,
-  delta_mean = 0,
-  delta_var = 0.32
-)
+fitting<-function(law,parms,data,name, scale='lin', ...) {
+  p<-plotdata(data, name, scale=scale, ...)
+  if (scale=='lin'){ p<-p+geom_line(aes(data,law(data,parms)))}
+  else if (scale == 'log') { p<-p+geom_line(aes(data,log10(law(data,parms))))}
+  p
+}
+
+plotdata <- function(data, name, histdata = NULL, scale = 'lin', bins = bins_default, plot_histbar = FALSE, xlim = NULL) {
+  if (is.null(histdata)) histdata <- hist(data, breaks = bins, plot = FALSE)
+  
+  df <- data.frame(mids = histdata$mids, counts = histdata$counts)
+  
+  # Calculate standard error for each bin
+  if (scale == "lin") {
+    df <- df %>%
+      mutate(se = sqrt(counts)) # Standard error as sqrt of counts (Poisson distribution assumption)
+  } else {
+    df <- df %>%
+      mutate(se = 1 / sqrt(counts)) # Standard error as 1/sqrt(counts)
+  }
+  
+  p <- ggplot() + theme_minimal()
+  
+  if (plot_histbar) {
+    p <- p + geom_bar(data = df, aes(x = mids, y = counts), stat = "identity", fill = 'blue', color = 'blue')
+    if (scale == "log") {
+      p <- p + scale_y_log10()
+    }
+  } else {
+    if (scale == "lin") {
+      p <- p + geom_point(data = df, aes(x = mids, y = counts), color = 'blue', size = 1) +
+        geom_errorbar(data = df, aes(x = mids, ymin = counts - se, ymax = counts + se), width = 0.2)
+    } else {
+      p <- p + geom_point(data = df, aes(x = mids, y = log10(counts)), color = 'blue', size = 1) +
+        geom_errorbar(data = df, aes(x = mids, ymin = log10(counts) - se, ymax = log10(counts) + se), width = 0.2)
+    }
+  }
+  
+  if (!is.null(xlim)) {
+    p <- p + xlim(xlim)
+  }
+  
+  p
+}
+
 
 PriorParam <- list(
-  tau = getGammaParam(prior_moments['tau_mean'], prior_moments['tau_var']),
-  omega = getGammaParam(prior_moments['omega_mean'], prior_moments['omega_var']),
-  delta = getBetaParam((prior_moments['delta_mean'] + pi/2) / pi, prior_moments['delta_var'] * pi^-2),
-  alpha = getBetaParam((prior_moments['alpha_mean'] + 1/3) / (4/3), prior_moments['alpha_var'] / (4/3)^2)
+  tau = getGammaParam(prior_moments[['tau_mean']], prior_moments[['tau_var']]),
+  omega = getGammaParam(prior_moments[['omega_mean']], prior_moments[['omega_var']]),
+  delta = getBetaParam((prior_moments[['delta_mean']] + pi/2) / pi, prior_moments[['delta_var']] * pi^-2),
+  alpha = getBetaParam((prior_moments[['alpha_mean']] + 1/3) / (4/3), prior_moments[['alpha_var']] / (4/3)^2)
 )
 
-PriorParam
 ```
 
-## Data Loading
+## Data Loading and Filtering
+
 
 ```{r }
 # Read files
@@ -109,134 +158,125 @@ data_precession <- calibrate(data_precession)
 
 # Cleaning the dataset
 data_lifetime   <- data_lifetime[data_lifetime<8]
-data_precession <- data_precession[data_precession<7]
+data_precession <- data_precession[data_precession>1 & data_precession<6]
 
 ```
 
 ## Lifetime Analysis 
 
 ```{r}
-zeros <- rep(0, length(data_lifetime))
-dataList <- list(x = data_lifetime, zeros=zeros)
+dataList <- list(x = data_lifetime)
+
+init_values <- list(list(tau = 2.2))
+
+n_burnin <- 5000  # Length of the burn-in phase
+thinning <- 2
+Nrep     <- 2000 # Number of values to simulate
+n_adapt  <- 1000
 
 # Write JAGS model
-modelString <- sprintf("
-  
-#model {
-#    for (i in 1:length(x)) {
-#      zeros[i] ~ dpois(zeros.mean[i])
-#      zeros.mean[i] <- -L[i]
-#      L[i] <- -x[i]/tau - log(tau)
-#    }
-#    tau ~ dunif(1.9,3)
-#}
-
-#model{
-#  for (i in 1:length(x)) {
-#    x[i] ~ dexp(1/tau)
-#  }
-
-  # Prior
-#  tau ~ dunif(1.9,3)
-#}
-
-model {
-
+model_lifetime_def <- sprintf("
+model{
   for (i in 1:length(x)) {
-      zeros[i] ~ dpois(zeros.mean[i])
-      zeros.mean[i] <- -L[i]
-      L[i] <- log((1-noise_signal)*(exp(-x[i]/tau)/tau) + noise_signal)
+    x[i] ~ dexp(1/tau)
   }
-  
-  noise_signal <- 0
+
   tau ~ dgamma(%.2f, %.2f)
 }", PriorParam$tau["alpha"], PriorParam$tau["beta"])
 
-# Save the model string to a file
-writeLines(modelString, con = "model.jags")
+model_lifetime <- jags.model(file = textConnection(model_lifetime_def), data = dataList, inits = init_values, n.chains = 1, n.adapt = n_burnin)
 
-```
-```{r}
-# Run the model
-jagsModel <- jags.model(file = "model.jags", 
-                        data = dataList, 
-                        n.chains = 1, 
-                        n.adapt = 100)
+# Adaptation phase
+adapt(model_lifetime, n_adapt)
 
-#variable.names= c('tau','tau_minus', 'fraction')
-jagsSamples <- coda.samples(model = jagsModel, 
-                            variable.names= c('noise_signal', 'tau'), 
-                            n.iter = 500)
+# Burn-in phase
+update(model_lifetime, n.iter = n_burnin)
 
-# Summarize and inspect results
-parms <- summary(jagsSamples)$statistics[,'Mean']
+# Sample from the posterior
+posterior_lifetime <- coda.samples(model_lifetime, variable.names = c('tau'), n.iter = Nrep, thin = thinning)
+(summary_lifetime <- summary(posterior_lifetime))
+plot(posterior_lifetime)
 
-summary(jagsSamples)
-```
-
-```{r plot-jags, fig.width=10, fig.height=8}
-#X11(width = 10, height = 8)
-
-plot(jagsSamples)
-```
-
-```{r}
-posterior_matrix <- as.matrix(jagsSamples)
+posterior_matrix <- as.matrix(posterior_lifetime)
 
 # Retrieve the chains
 tau_samples <- posterior_matrix[, "tau"]
 
-par(mfrow = c(3, 2))
-
-
 acf(tau_samples, main = "Autocorrelation of tau")
 ```
 
+## Precession Analysis
 
-## Precession
+```{r }
+tau_lifetime_posterior <- getGammaParam(summary_lifetime$statistics[['Mean']] ,summary_lifetime$statistics[['SD']])
+
+```
 
 ```{r}
-model_precession <- "
+
+dataList = list(x = data_precession, zeros = rep(0, length(data_precession)))
+
+init_values <- list(
+  list(delta_base = 0.4, omega = 4.7, alpha_base = 0.4, tau=2.2)
+)
+
+n_burnin <- 1000  # Length of the burn-in phase
+thinning <- 2
+Nrep     <- 10000 # Number of values to simulate
+n_adapt  <- 1000
+
+model_precession_def <- sprintf("
 model {
   for (i in 1:length(x)) {
     zeros[i] ~ dpois(zeros.mean[i])
     zeros.mean[i] <- -L[i]
-    L[i] <- -x[i]/tau + log(1+alfa*cos(omega*x[i]+delta)) - log(tau) - log(FACTOR)
+    L[i] <- -x[i]/tau + log(1+alpha*cos(omega*x[i]+delta)) - log(tau) - log(FACTOR)
   }
   
-  tau ~ dunif(1.9,3)
-  delta ~ dunif(-3.14,3.14)
-  omega ~ dunif(4.2,5.2)
-  #alfa ~ dnorm(1/3,1.82)
-  alfa ~ dunif(0,1)
-  FACTOR <- 1 + alfa/(1+tau^2*omega^2) * (cos(delta)-tau*omega*sin(delta))
+  delta_base ~ dbeta(%.2f, %.2f) 
+  omega ~ dgamma(%.2f, %.2f)
+  alpha_base ~ dbeta(%.2f, %.2f) 
+  tau ~ dgamma(%.2f, %.2f)
+  
+  delta <- delta_base * 3.14 - 3.14/2
+  alpha <- alpha_base * 4/3 - 1/3
+  
+  FACTOR <- 1 + alpha/(1+tau^2*omega^2) * (cos(delta)-tau*omega*sin(delta))
 }
-"
+", PriorParam$delta["alpha"], PriorParam$delta["beta"], 
+   PriorParam$omega["alpha"], PriorParam$omega["beta"],  
+   PriorParam$alpha["alpha"], PriorParam$alpha["beta"], 
+   tau_lifetime_posterior["alpha"], tau_lifetime_posterior["beta"])
 
-n_burnin <- 100
-dataList = list(x = data_precession, zeros = rep(0, length(data_precession)))
-model <- jags.model(file = textConnection(model_precession), data = dataList)
-adapt(model,n_burnin)
 
-posterior_sample <- coda.samples(model, variable.names = c('tau', 'delta','omega','alfa'), n.iter = 500, thin = 1)
-summary(posterior_sample)
+# Create the model
+model_precession <- jags.model(file = textConnection(model_precession_def), data = dataList, inits = init_values, n.chains = 1, n.adapt = n_burnin)
 
-posterior_matrix <- as.matrix(posterior_sample)
+# Adaptation phase
+adapt(model_precession, n_adapt)
+
+# Burn-in phase
+update(model_precession, n.iter = n_burnin)
+
+
+# Sample from the posterior
+posterior_precession <- coda.samples(model_precession, variable.names = c('delta', 'omega', 'alpha', 'tau'), n.iter = Nrep, thin = thinning)
+summary(posterior_precession)
+posterior_matrix <- as.matrix(posterior_precession)
+
 # Retrieve the chains
-
-tau_samples <- posterior_matrix[, "tau"]
 delta_samples <- posterior_matrix[, "delta"]
 omega_samples <- posterior_matrix[, "omega"]
-alfa_samples <- posterior_matrix[, "alfa"]
-
+alpha_samples <- posterior_matrix[, "alpha"]
+tau_samples <- posterior_matrix[, "tau"]
 
 par(mfrow = c(2, 2))
 
-acf(tau_samples, main = "Autocorrelation of tau")
 acf(delta_samples, main = "Autocorrelation of delta")
 acf(omega_samples, main = "Autocorrelation of omega")
-acf(alfa_samples, main = "Autocorrelation of alfa")
+acf(alpha_samples, main = "Autocorrelation of alpha")
+acf(tau_samples, main = "Autocorrelation of tau")
 ```
 ```{r , fig.width=10, fig.height=8}
-plot(posterior_sample)
+plot(posterior_precession)
 ```
