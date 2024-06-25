@@ -11,6 +11,9 @@ output:
   html_document:
     number_sections: true
     theme: spacelab
+editor_options: 
+  markdown: 
+    wrap: 72
 ---
 
 ```{r setup, include=FALSE}
@@ -37,101 +40,157 @@ library(dplyr)
 
 ## Introduction
 
-Muons are long-lived particles, produced in the decays of pions and kaons originating from the interactions
-of primary cosmic rays with the Earth’s atmosphere.
+Muons are long-lived particles, produced in the decays of pions and
+kaons originating from the interactions of primary cosmic rays with the
+Earth’s atmosphere.
 
-Moreover, parity violation is also present in the decay which proceeds as follow:
-$\mu^+ \rightarrow e^+ + \nu_e + \overline{\nu_\mu}$ and $\mu^- \rightarrow e^- + \overline{\nu_e} + \nu_\mu$.
+Moreover, parity violation is also present in the decay which proceeds
+as follow: $\mu^+ \rightarrow e^+ + \nu_e + \overline{\nu_\mu}$ and
+$\mu^- \rightarrow e^- + \overline{\nu_e} + \nu_\mu$.
 
-Simple experiments can be performed by measuring muons that decay in a thick absorber. If the absorber is immersed in a constant magnetic field, the muon spin, before the decay,
-precesses with its Larmor frequency $\omega_L = g_{\mu} \frac{eB}{2 m_{\mu} c}$.
+Simple experiments can be performed by measuring muons that decay in a
+thick absorber. If the absorber is immersed in a constant magnetic
+field, the muon spin, before the decay, precesses with its Larmor
+frequency $\omega_L = g_{\mu} \frac{eB}{2 m_{\mu} c}$.
 
-The decay proceeds mainly along the direction of the spin of the muon and therefore, if the muon is (partly) polarized, the detected signal varies with time with $\omega_L$.
-Analyzing the data collected without and with the magnetic field, we set up a Markov Chain Monte Carlo that allows us to extract the muon lifetime $\tau$, with the magnetic field turned off, and the muon precession frequency with the magnetic field turned on.
+The decay proceeds mainly along the direction of the spin of the muon
+and therefore, if the muon is (partly) polarized, the detected signal
+varies with time with $\omega_L$. Analyzing the data collected without
+and with the magnetic field, we set up a Markov Chain Monte Carlo that
+allows us to extract the muon lifetime $\tau$, with the magnetic field
+turned off, and the muon precession frequency with the magnetic field
+turned on.
 
-In this document we are presenting a conventional kind of analysis, by building an histogram and then fitting it with a curve. The value of the parameters are inferred in a Bayesian framework.
+In this document we are presenting a conventional kind of analysis, by
+building an histogram and then fitting it with a curve. The value of the
+parameters are inferred in a Bayesian framework.
 
 ## Description of the data analysis
 
-We have at our disposal two datasets: 'Lifetime' and 'Precession'.
-The former contains the measurements of the time difference between the muon (antimuon) and electron (positron) signals with the magnetic field turned off, while in the latter the measurements are taken with a magnetic field $B=5.6\ \text{mT}$. 
-To convert the ADC counts in seconds we use the results of a previous calibration measurement:
-$ t = p_0 + \text{ADC} \cdot p_1 $, where $p_0 = (7.4 \pm 4.4) \ \text{ns}$ and $ p_1 = (14.90 \pm 0.11) \ \text{ns} $.
+We have at our disposal two datasets: 'Lifetime' and 'Precession'. The
+former contains the measurements of the time difference between the muon
+(antimuon) and electron (positron) signals with the magnetic field
+turned off, while in the latter the measurements are taken with a
+magnetic field $B=5.6\ \text{mT}$. To convert the ADC counts in seconds
+we use the results of a previous calibration measurement:
+$t = p_0 + \text{ADC} \cdot p_1$, where
+$p_0 = (7.4 \pm 4.4) \ \text{ns}$ and
+$p_1 = (14.90 \pm 0.11) \ \text{ns}$ In particular, since the electron
+could also undergo nuclear capture, the vast majority of the signals are
+made of positrons.
 
-In particular, since the electron could also undergo nuclear capture, the vast majority of the signals are made of positrons.
+Defining N(t) as the number of observed decays at time t + dt, we expect
+it to follow the rule $N(t) = N_0 e^{-\frac t \tau} +c$ in the Lifetime
+dataset, with c modeling a constant background.
 
-Defining N(t) as the number of observed decays at time t + dt, we expect it to follow the rule 
-$ N(t) = N_0 e^{- \frac{t}{\tau}} + c $
-in the Lifetime dataset, with c modeling a constant background.
+If the magnetic field is turned on, we expect instead a different law
+due to the precession of the antimuon:
+$N(t) = N_0 e^{-\frac t \tau} (1+\alpha\cos(\omega_Lt+\delta) + c$ ,
+where $\alpha$ is an asymmetry parameter originating from the parity
+violation.
 
-
-If the magnetic field is turned on, we expect instead a different law due to the precession of the antimuon: $N(t) = N_0 e^{-\frac {t} {\tau}} \cdot (1+\alpha \cos(\omega_L t + \delta))+ c $.
-$\alpha$ is an asymmetry parameter originating from the parity violation. 
-
-The analytic form of the differential emission probability per unit of time of the positron is in fact:
-$$
+The analytic form of the differential emission probability per unit of
+time of the positron is in fact: $$
 d\Gamma = W(\varepsilon, \theta) \, d\varepsilon \, d\Omega = \frac{1}{4\pi \tau} \cdot 2\varepsilon^2 (3 - 2\varepsilon) \left[ 1 + \frac{2\varepsilon - 1}{3 - 2\varepsilon} \cos \theta \right] d\varepsilon \, d\Omega = \frac{1}{4\pi \tau} \cdot K(\varepsilon)[1+a(\varepsilon) \cos(\theta)] d\varepsilon \, d\Omega
-$$
-where $\epsilon = \frac{\text{E}}{\text{E}_{\text{max}}}$, $K(\varepsilon) = 2\varepsilon^2(3-2\varepsilon)$, $a(\varepsilon) = \frac{2\varepsilon-1}{3-2\varepsilon}$, $\text{E}_{\text{max}} \approx 53.83\ \text{MeV}$, $\theta=0$ is the spin direction.
+$$ where $\epsilon = \frac{\text{E}}{\text{E}_{\text{max}}}$,
+$K(\varepsilon) = 2\varepsilon^2(3-2\varepsilon)$,
+$a(\varepsilon) = \frac{2\varepsilon-1}{3-2\varepsilon}$,
+$\text{E}_{\text{max}} \approx 53.83\ \text{MeV}$, $\theta=0$ is the
+spin direction.
 
-The asymmetry term is thus $\alpha(\varepsilon) = K(\varepsilon)a(\varepsilon)$, and it's energy dependent with support $\alpha\in \left[ -\frac 1 3,\ 1 \right]$. We can calculate its mean value and variance:
-  - $\bar{\alpha} = \int_0^1 \alpha(\varepsilon) \, d\varepsilon= \frac{1}{3}$
-  - $\text{Var}[\alpha] = \int_0^1 (\alpha(\varepsilon)-\bar{\alpha})^2 \, d\varepsilon \approx 0.3$
+The asymmetry term is thus
+$\alpha(\varepsilon) = K(\varepsilon)a(\varepsilon)$, and it's energy
+dependent with support $\alpha\in \left[ -\frac 1 3,\ 1 \right]$. We can
+calculate its mean value and variance: 
 
-This derivation is valid in the hypothesis of maximum and equal detection efficiency for every energy in the spectrum. In practice, however, its mean value is considerably lower.
+-   $\bar{\alpha} = \int_0^1 \alpha(\varepsilon) \, d\varepsilon= \frac{1}{3}$ 
+-   $\text{Var}[\alpha] = \int_0^1 (\alpha(\varepsilon)-\bar{\alpha})^2 \, d\varepsilon \approx 0.3$
 
-Furthermore, the angular distribution of cosmic muons is experimentally close to $P(\theta) = I_0 \cos^2(\theta)$, where $\theta$ is the azimuthal angle. 
+This derivation is valid in the hypothesis of maximum and equal
+detection efficiency for every energy in the spectrum. In practice,
+however, its mean value is considerably lower.
 
-Considering a detector characterized by a cylindrical symmetry along the azimuth direction, and immersed in a uniform transverse magnetic field $B$, we can extrapolate that the pdf of observing a decay at time $t$ is 
+Furthermore, the angular distribution of cosmic muons is experimentally
+close to $P(\theta) = I_0 \cos^2(\theta)$, where $\theta$ is the
+azimuthal angle.
+
+Considering a detector characterized by a cylindrical symmetry along the
+azimuth direction, and immersed in a uniform transverse magnetic field
+$B$, we can extrapolate that the pdf of observing a decay at time $t$ is
 $$
 P(t) = \frac{e^{-\frac{t}{\tau}} (1+\alpha \cos(\omega_L t + \delta))}{Z}
-$$ 
-with $\alpha$ accounting for the experimental asymmetry, and $\delta$ modeling errors in the definition of the time zero or angular misalignments.
+$$ with $\alpha$ accounting for the experimental asymmetry, and $\delta$
+modeling errors in the definition of the time zero or angular
+misalignments.
 
 ## Choice of the priors
 
 ### Muon Lifetime $\tau$
 
-For the muon lifetime $\tau$, we assume a prior that reflects our prior knowledge based on similar previous experiments:
+For the muon lifetime $\tau$, we assume a prior that reflects our prior
+knowledge based on similar previous experiments:
 
-  - Amsler: $\tau = (2.10\pm0.05)\ \mu\text{s}$;
-  - Bosnam: $\tau = (2.16\pm0.02)\ \mu\text{s}$ and $\tau = (2.07\pm0.02)\ \mu\text{s}$
+-   Amsler: $\tau = (2.10\pm0.05)\ \mu\text{s}$;
+-   Bosnam: $\tau = (2.16\pm0.02)\ \mu\text{s}$ and
+    $\tau = (2.07\pm0.02)\ \mu\text{s}$
 
-Considering a weighted average of them, we obtain a prior mean of $\bar{\tau_{\text{prior}}} = 2.11\  \mu\text{s}$ with standard deviation of $\text{SD}[{\tau_{\text{prior}}}] = 0.01  \mu\text{s}$
+Considering a weighted average of them, we obtain a prior mean of
+$\bar{\tau_{\text{prior}}} = 2.11\  \mu\text{s}$ with standard deviation
+of $\text{SD}[{\tau_{\text{prior}}}] = 0.01  \mu\text{s}$
 
-Therefore, we decide to model the prior with a gamma distribution of parameters $\alpha$ and $\beta$ tuned to satisfy these conditions.
+Therefore, we decide to model the prior with a gamma distribution of
+parameters $\alpha$ and $\beta$ tuned to satisfy these conditions.
 
 ### Asimmetry parameter $\alpha$
 
-The most conservative choice would be a prior fully based on the theoretical aspects mentioned above.
-Nevertheless, since the experimental setup is similar to the one used in the previous experiments we previously cited, we decide again to use them:
+The most conservative choice would be a prior fully based on the
+theoretical aspects mentioned above. Nevertheless, since the
+experimental setup is similar to the one used in the previous
+experiments we previously cited, we decide again to use them:
 
-  - Amsler: $\alpha = 0.067 \pm 0.011$;
-  - Bosnam: $\alpha = 0.05  \pm 0.01$ and $\alpha = 0.06  \pm 0.01$.
+-   Amsler: $\alpha = 0.067 \pm 0.011$;
+-   Bosnam: $\alpha = 0.05  \pm 0.01$ and $\alpha = 0.06  \pm 0.01$.
 
-This time we are more conservative, choosing a prior mean of 0.06 with a standard deviation of 0.01.
-We model the pdf using a re scaled and shifted Beta distribution, having support in $\alpha\in \left[-\frac 1 3,\ 1 \right]$.
+This time we are more conservative, choosing a prior mean of 0.06 with a
+standard deviation of 0.01. We model the pdf using a re scaled and
+shifted Beta distribution, having support in
+$\alpha\in \left[-\frac 1 3,\ 1 \right]$.
 
 ### Larmor frequency $\omega_L$
 
-Recall that the Larmor frequency formula is $\omega_L = g_{\mu} \frac {eB} {2 m_{\mu} c}$.
-Considering $g_{\mu}=2$, the magnetic field $B=5.6\ \text{mT} \pm 2\%$, and all the other known constants, we can calculate the expected value to be $\omega_L = 4.77\ \text{MHz}$.
+Recall that the Larmor frequency formula is
+$\omega_L = g_{\mu} \frac {eB} {2 m_{\mu} c}$. Considering $g_{\mu}=2$,
+the magnetic field $B=5.6\ \text{mT} \pm 2\%$, and all the other known
+constants, we can calculate the expected value to be
+$\omega_L = 4.77\ \text{MHz}$.
 
-The main source of error in this estimate is by far the uncertainty in the magnetic field.
-Assuming a uniform distribution, we can convert the maximum error in a casual one $\sigma_B = \frac {\Delta B} {\sqrt{12}}$. 
-Projecting this back to the Larmor frequency, we can estimate its  casual error to be $\sigma_{\omega_L} = 0.06\ \text{mT}$.
+The main source of error in this estimate is by far the uncertainty in
+the magnetic field. Assuming a uniform distribution, we can convert the
+maximum error in a casual one $\sigma_B = \frac {\Delta B} {\sqrt{12}}$.
+Projecting this back to the Larmor frequency, we can estimate its casual
+error to be $\sigma_{\omega_L} = 0.06\ \text{mT}$.
 
-Therefore, we decide to model the prior with a gamma distribution of parameters $\alpha$ and $\beta$ tuned to satisfy these conditions.
+Therefore, we decide to model the prior with a gamma distribution of
+parameters $\alpha$ and $\beta$ tuned to satisfy these conditions.
 
 ### Initial phase $\delta$
 
-Given the theoretical considerations made above, considering the experimental evidence that the probability of observing a cosmic muon at the azimuthal angle $\theta$ is $P(\theta) = I_0 \cos^2(\theta)$, we expect the mean value to be 0 with a variance $\text{Var}[\theta]= \int_{-\frac \pi 2}^{\frac \pi 2} I_0 \theta^2 \cos^2(\theta)\ d\theta = 0.32$.
+Given the theoretical considerations made above, considering the
+experimental evidence that the probability of observing a cosmic muon at
+the azimuthal angle $\theta$ is $P(\theta) = I_0 \cos^2(\theta)$, we
+expect the mean value to be 0 with a variance
+$\text{Var}[\theta]= \int_{-\frac \pi 2}^{\frac \pi 2} I_0 \theta^2 \cos^2(\theta)\ d\theta = 0.32$.
 
-Again, we model the prior distribution with a rescaled and shifted beta distribution, in order to have support in $\theta \in \left [-\frac \pi 2, \frac \pi 2 \right]$ and those moments.
+Again, we model the prior distribution with a rescaled and shifted beta
+distribution, in order to have support in
+$\theta \in \left [-\frac \pi 2, \frac \pi 2 \right]$ and those moments.
 
 ### $N_0$ and c
 
-These parameters are modeling the number of true observed decays and the background rate. Since they depend both on the time of measurement and the behaviour of the all detector they are really difficult to estimate, so we decide to take just a uniform prior.
+These parameters are modeling the number of true observed decays and the
+background rate. Since they depend both on the time of measurement and
+the behaviour of the all detector they are really difficult to estimate,
+so we decide to take just a uniform prior.
 
 ## Functions and default values
 
@@ -300,7 +359,6 @@ PriorParam <- list(
 
 ## Data Loading and Filtering
 
-
 ```{r }
 # Read files
 paths_lifetime   <-dir('g-2data/data/lifetime/2023_24', pattern ='^t', full.names=TRUE)
@@ -327,7 +385,6 @@ data_lifetime   <- calibrate(data_lifetime)
 data_precession <- calibrate(data_precession)
 ```
 
-
 ```{r }
 plotdata(data_lifetime, title = 'Lifetime Dataset', scale = 'log', plot_histbar = FALSE, bins = bins_lifetime) #data, xlab, histdata = NULL, scale, bins, plot_histbar, xlim
 plotdata(data_precession, title = 'Precession Dataset', scale=  'log', plot_histbar = FALSE)
@@ -346,7 +403,6 @@ plotdata(data_lifetime, title = 'Lifetime', histdata = filtered_lifetime, scale 
 plotdata(data_precession, title = 'Precession', histdata = filtered_precession, scale=  'log', plot_histbar = FALSE)
 ```
 
-
 ## Lifetime analysis
 
 ```{r }
@@ -358,7 +414,7 @@ init_values <- list(list(N = 10000, c = 5, tau = 2.))
 
 n_burnin <- 5000  # Length of the burn-in phase
 thinning <- 2
-Nrep     <- 1e3 # Number of values to simulate
+Nrep     <- 1e5 # Number of values to simulate
 n_adapt  <- 2000
 
 
@@ -400,12 +456,11 @@ N_samples   <- posterior_matrix[, "N"]
 c_samples   <- posterior_matrix[, "c"]
 tau_samples <- posterior_matrix[, "tau"]
 
-par(mfrow = c(3, 2))
-
 acf(N_samples,  main = "Autocorrelation of N")
 acf(c_samples,   main = "Autocorrelation of c")
 acf(tau_samples, main = "Autocorrelation of tau")
 ```
+
 ```{r }
 N_stats <- extract_stats(summary_lifetime, "N")
 c_stats <- extract_stats(summary_lifetime, "c")
@@ -420,6 +475,7 @@ plot_posterior_param(c_samples, "c", c_stats)
 plot_posterior_param(tau_samples, "tau", tau_stats, prior_tau, xlim=c(2.03,2.23), xlab=expression(tau ~ "[" * mu * "s" * "]"), legend.loc="topleft")
 
 ```
+
 ```{r }
 attributes(summary_lifetime)
 parms_lt <- summary_lifetime$statistics[,'Mean']
@@ -442,7 +498,7 @@ y <- filtered_precession$counts
 
 n_burnin <- 5000  # Length of the burn-in phase
 thinning <- 2
-Nrep     <- 1e3 # Number of values to simulate
+Nrep     <- 1e5 # Number of values to simulate
 n_adapt  <- 1000
 
 # Define initial values for the chains
@@ -548,7 +604,6 @@ plot_posterior_param(omega_samples, "omega", omega_stats, prior_omega, xlab = ex
 plot_posterior_param(alpha_samples, "alpha", alpha_stats, prior_alpha, xlab = expression(alpha), xlim = c(-0.02, .12))
 plot_posterior_param(g_samples, "g", g_stats, xlab=expression('g' * mu))
 ```
-
 
 ```{r }
 precession_law <- function(x, parms) {
