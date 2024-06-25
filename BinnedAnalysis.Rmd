@@ -3,11 +3,11 @@ title: "Binned Analysis"
 author: "Emanuele Coradin and Dario Puggioni"
 date: "`r Sys.Date()`"
 output: 
+  read_document: rmdformats::readthedown
   pdf_document:
     number_sections: true
     toc: true
     toc_depth: 2
-  read_document: rmdformats::readthedown
   html_document:
     number_sections: true
     theme: spacelab
@@ -33,7 +33,7 @@ library(ggplot2)
 library(dplyr)
 ```
 
-# Bayesian analysis of the $\mu$ lifetime and g-2 parameter with $\mu$SR
+# Bayesian analysis of the $\mu$ lifetime and g-2 parameter with $\mu$ SR
 
 ## Introduction
 
@@ -44,7 +44,7 @@ Moreover, parity violation is also present in the decay which proceeds as follow
 $\mu^+ \rightarrow e^+ + \nu_e + \overline{\nu_\mu}$ and $\mu^- \rightarrow e^- + \overline{\nu_e} + \nu_\mu$.
 
 Simple experiments can be performed by measuring muons that decay in a thick absorber. If the absorber is immersed in a constant magnetic field, the muon spin, before the decay,
-precesses with its Larmor frequency $\omega_L = g_\mu \frac{eB}{2 m_\mu c}$.
+precesses with its Larmor frequency $\omega_L = g_{\mu} \frac{eB}{2 m_{\mu} c}$.
 
 The decay proceeds mainly along the direction of the spin of the muon and therefore, if the muon is (partly) polarized, the detected signal varies with time with $\omega_L$.
 Analyzing the data collected without and with the magnetic field, we set up a Markov Chain Monte Carlo that allows us to extract the muon lifetime $\tau$, with the magnetic field turned off, and the muon precession frequency with the magnetic field turned on.
@@ -54,29 +54,39 @@ In this document we are presenting a conventional kind of analysis, by building 
 ## Description of the data analysis
 
 We have at our disposal two datasets: 'Lifetime' and 'Precession'.
-The former contains the measurements of the time difference between the muon (antimuon) and electron (positron) signals with the magnetic field turned off, while in the latter the measurements are taken with a magnetic field $B=5.6\ \text{mT} \pm 2\%$. 
+The former contains the measurements of the time difference between the muon (antimuon) and electron (positron) signals with the magnetic field turned off, while in the latter the measurements are taken with a magnetic field $B=5.6\ \text{mT}$. 
 To convert the ADC counts in seconds we use the results of a previous calibration measurement:
-$t = p_0 + \text{ADC}\cdot p_1$, where $p_0 = (7.4 \pm 4.4)\ \text{ns}$ and $p_1 = (14.90 \pm 0.11)\ \text{ns}$.
+$ t = p_0 + \text{ADC} \cdot p_1 $, where $p_0 = (7.4 \pm 4.4) \ \text{ns}$ and $ p_1 = (14.90 \pm 0.11) \ \text{ns} $.
 
 In particular, since the electron could also undergo nuclear capture, the vast majority of the signals are made of positrons.
 
-Defining $N(t)$ the number of observed decays at time $t+dt$, we expect it to follow the rule $N(t) = N_0 e^{\frac t \tau} + c $ in the Lifetime dataset, with c modelling a constant background.
-If the magnetic field is turned on, we expect instead a different law due to the precession of the antimuon: $N(t) = N_0 e^{\frac t \tau} \cdot (1+\alpha \cos(\omega_L t + \delta))+ c $.
+Defining N(t) as the number of observed decays at time t + dt, we expect it to follow the rule 
+$ N(t) = N_0 e^{- \frac{t}{\tau}} + c $
+in the Lifetime dataset, with c modeling a constant background.
+
+
+If the magnetic field is turned on, we expect instead a different law due to the precession of the antimuon: $N(t) = N_0 e^{-\frac {t} {\tau}} \cdot (1+\alpha \cos(\omega_L t + \delta))+ c $.
 $\alpha$ is an asymmetry parameter originating from the parity violation. 
 
 The analytic form of the differential emission probability per unit of time of the positron is in fact:
-$d\Gamma = W(\varepsilon, \theta) \, d\varepsilon \, d\Omega = \frac{1}{4\pi \tau} \cdot 2\varepsilon^2 (3 - 2\varepsilon) \left[ 1 + \frac{2\varepsilon - 1}{3 - 2\varepsilon} \cos \theta \right] d\varepsilon \, d\Omega = \frac{1}{4\pi \tau} \cdot K(\varepsilon)[1+a(\varepsilon) \cos(\theta)] d\varepsilon \, d\Omega$, where $\epsilon = \frac{\text{E}}{\text{E}_{\text{max}}}$, $K(\varepsilon) = 2\varepsilon^2(3-2\varepsilon)$, $a(\varepsilon) = \frac{2\varepsilon-1}{3-2\varepsilon}$, $\text{E}_{\text{max}} \approx 53.83\ \text{MeV}$, $\theta=0$ is the spin direction.
+$$
+d\Gamma = W(\varepsilon, \theta) \, d\varepsilon \, d\Omega = \frac{1}{4\pi \tau} \cdot 2\varepsilon^2 (3 - 2\varepsilon) \left[ 1 + \frac{2\varepsilon - 1}{3 - 2\varepsilon} \cos \theta \right] d\varepsilon \, d\Omega = \frac{1}{4\pi \tau} \cdot K(\varepsilon)[1+a(\varepsilon) \cos(\theta)] d\varepsilon \, d\Omega
+$$
+where $\epsilon = \frac{\text{E}}{\text{E}_{\text{max}}}$, $K(\varepsilon) = 2\varepsilon^2(3-2\varepsilon)$, $a(\varepsilon) = \frac{2\varepsilon-1}{3-2\varepsilon}$, $\text{E}_{\text{max}} \approx 53.83\ \text{MeV}$, $\theta=0$ is the spin direction.
 
 The asymmetry term is thus $\alpha(\varepsilon) = K(\varepsilon)a(\varepsilon)$, and it's energy dependent with support $\alpha\in \left[ -\frac 1 3,\ 1 \right]$. We can calculate its mean value and variance:
-
-$\bar{\alpha} = \int_0^1 \alpha(\varepsilon) \, d\varepsilon= \frac{1}{3}$
-$\text{Var}[\alpha] = \int_0^1 (\alpha(\varepsilon)-\bar{\alpha})^2 \, d\varepsilon \approx 0.3$
+  - $\bar{\alpha} = \int_0^1 \alpha(\varepsilon) \, d\varepsilon= \frac{1}{3}$
+  - $\text{Var}[\alpha] = \int_0^1 (\alpha(\varepsilon)-\bar{\alpha})^2 \, d\varepsilon \approx 0.3$
 
 This derivation is valid in the hypothesis of maximum and equal detection efficiency for every energy in the spectrum. In practice, however, its mean value is considerably lower.
 
 Furthermore, the angular distribution of cosmic muons is experimentally close to $P(\theta) = I_0 \cos^2(\theta)$, where $\theta$ is the azimuthal angle. 
 
-Considering a detector characterized by a cylindrical symmetry along the azimuth direction, and immersed in a uniform transverse magnetic field B,  we can extrapolate that the pdf of observing a decay at time t is $P(t)=\frac{e^{-\frac t \tau} (1+\alpha \cos(\omega_L t +\delta))}{Z}$, with $\alpha$ accounting for the experimental asymmetry, and $\delta$ modeling errors in the definition of the time zero or angular misalignments.
+Considering a detector characterized by a cylindrical symmetry along the azimuth direction, and immersed in a uniform transverse magnetic field $B$, we can extrapolate that the pdf of observing a decay at time $t$ is 
+$$
+P(t) = \frac{e^{-\frac{t}{\tau}} (1+\alpha \cos(\omega_L t + \delta))}{Z}
+$$ 
+with $\alpha$ accounting for the experimental asymmetry, and $\delta$ modeling errors in the definition of the time zero or angular misalignments.
 
 ## Choice of the priors
 
@@ -267,7 +277,7 @@ extract_stats <- function(summary_obj, param_name) {
 ```
 
 ```{r Default values}
-bins_default <- 150
+bins_default <- 120
 bins_lifetime <- 60
 
 # Named vector containing the moments for the priors
@@ -348,7 +358,7 @@ init_values <- list(list(N = 10000, c = 5, tau = 2.))
 
 n_burnin <- 5000  # Length of the burn-in phase
 thinning <- 2
-Nrep     <- 1e5 # Number of values to simulate
+Nrep     <- 1e3 # Number of values to simulate
 n_adapt  <- 2000
 
 
@@ -407,7 +417,7 @@ prior_tau <- function(x) {
 
 plot_posterior_param(N_samples, "N", N_stats)
 plot_posterior_param(c_samples, "c", c_stats)
-plot_posterior_param(tau_samples, "tau", tau_stats, prior_tau, xlim=c(1.9,2.5), xlab=expression(tau ~ "[" * mu * "s" * "]"), legend.loc="topleft")
+plot_posterior_param(tau_samples, "tau", tau_stats, prior_tau, xlim=c(2.03,2.23), xlab=expression(tau ~ "[" * mu * "s" * "]"), legend.loc="topleft")
 
 ```
 ```{r }
@@ -432,7 +442,7 @@ y <- filtered_precession$counts
 
 n_burnin <- 5000  # Length of the burn-in phase
 thinning <- 2
-Nrep     <- 1e5 # Number of values to simulate
+Nrep     <- 1e3 # Number of values to simulate
 n_adapt  <- 1000
 
 # Define initial values for the chains
@@ -486,7 +496,6 @@ update(model_precession, n.iter = n_burnin)
 # Sample from the posterior
 posterior_precession <- coda.samples(model_precession, variable.names = c('N', 'c', 'delta', 'omega', 'alpha', 'g', 'tau'), n.iter = Nrep, thin = thinning)
 (summary_precession <- summary(posterior_precession))
-plot(posterior_precession)
 
 posterior_matrix <- as.matrix(posterior_precession)
 
@@ -498,7 +507,6 @@ omega_samples <- posterior_matrix[, "omega"]
 alpha_samples <- posterior_matrix[, "alpha"]
 g_samples <- posterior_matrix[, "g"]
 
-par(mfrow = c(3, 2))
 
 acf(N_samples, main = "Autocorrelation of N")
 acf(c_samples, main = "Autocorrelation of c")
