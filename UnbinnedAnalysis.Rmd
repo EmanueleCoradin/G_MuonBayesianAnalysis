@@ -31,21 +31,44 @@ color_vector <- c("#CC0000",   # Dark red
 library(rjags)
 library(ggplot2)
 library(dplyr)
-library(coda)
-```
+library(rstan)
+library(ggplot2)
 
-# Bayesian analysis of the $\mu^+$ and $\mu^-$ lifetime in aluminum
+```
+# Bayesian analysis of the $\mu$ lifetime and g-2 parameter with $\mu$ SR
 
 ## Introduction
 
-The goal of this project is to obtain the lifetimes of positive and negative muons in aluminium. The given dataset contains the time passed between the implantation of the muon and its decay. 
+Muons are long-lived particles, produced in the decays of pions and
+kaons originating from the interactions of primary cosmic rays with the
+Earth’s atmosphere.
 
-In this document I'm exploring the following idea: 
-we have three possible kinds of event, decay of either positive or negative muon or a background event. The first two will follow an exponential distribution, even though having different decay constants, while the background follows a uniform distribution. A weighted average of them will give the distribution of the data.  In this way it is possible to avoid the construction of an histogram (unbinned analysis).
+Moreover, parity violation is also present in the decay which proceeds
+as follow: $\mu^+ \rightarrow e^+ + \nu_e + \overline{\nu_\mu}$ and
+$\mu^- \rightarrow e^- + \overline{\nu_e} + \nu_\mu$.
 
-## Useful functions
+Simple experiments can be performed by measuring muons that decay in a
+thick absorber. If the absorber is immersed in a constant magnetic
+field, the muon spin, before the decay, precesses with its Larmor
+frequency $\omega_L = g_{\mu} \frac{eB}{2 m_{\mu} c}$.
+
+The decay proceeds mainly along the direction of the spin of the muon
+and therefore, if the muon is (partly) polarized, the detected signal
+varies with time with $\omega_L$. Analyzing the data collected without
+and with the magnetic field, we set up a Markov Chain Monte Carlo that
+allows us to extract the muon lifetime $\tau$, with the magnetic field
+turned off, and the muon precession frequency with the magnetic field
+turned on.
+
+In this document we are presenting an unbinned analysis. See the file about the binned analysis for more details.
+
+
+## Functions and default values
 
 ```{r functions}
+
+# ------- Analytical calculations -----------
+
 getGammaParam <- function(mean, variance) {
   beta <- mean / variance
   alpha <- mean * beta
@@ -59,28 +82,164 @@ getBetaParam <- function(mean, variance) {
   c(alpha = alpha, beta = beta)
 }
 
-prior_moments <- c(
-  tau_mean = 2.1,
-  tau_var = 0.05^2,
-  alpha_mean = 1/3,
-  alpha_var = 0.3,
-  omega_mean = 4.77,
-  omega_var = (4.77 * 0.04)^2 / 12,
-  delta_mean = 0,
-  delta_var = 0.32
-)
+# -------- Functions for plotting -----------
 
-PriorParam <- list(
-  tau = getGammaParam(prior_moments['tau_mean'], prior_moments['tau_var']),
-  omega = getGammaParam(prior_moments['omega_mean'], prior_moments['omega_var']),
-  delta = getBetaParam((prior_moments['delta_mean'] + pi/2) / pi, prior_moments['delta_var'] * pi^-2),
-  alpha = getBetaParam((prior_moments['alpha_mean'] + 1/3) / (4/3), prior_moments['alpha_var'] / (4/3)^2)
-)
+plotdata <- function(data, title = NULL, xlab = expression(Delta * T ~ "[" * mu * "s" * "]"), histdata = NULL, scale = 'lin', bins = bins_default, plot_histbar = FALSE, xlim = NULL, ylim=NULL) {
+  if (is.null(histdata)) histdata <- hist(data, breaks = bins, plot = FALSE)
 
-PriorParam
+  df <- data.frame(mids = histdata$mids, counts = histdata$counts)
+
+  if (scale == "lin") {
+    df <- df %>% mutate(se = sqrt(counts))  # Errore standard come sqrt dei counts (assunzione di distribuzione di Poisson)
+  } else {
+    df <- df %>% mutate(se = 1 / (log(10)*sqrt(counts)))  # Errore standard come 1/sqrt(counts)
+  }
+
+  p <- ggplot() +
+    theme_minimal() +
+    ggtitle(title) +
+    labs(x = xlab, y = ifelse(scale == "lin", "Counts", expression(log[10](Counts))), color = "Legend") +
+    theme(plot.title = element_text(face = "bold", size = 14),
+          axis.title.x = element_text(size = 12),
+          axis.title.y = element_text(size = 12))
+
+  if (plot_histbar) {
+    p <- p + geom_bar(data = df, aes(x = mids, y = counts), fill = 'blue', color = 'blue')
+    if (scale == "log") {
+      p <- p + scale_y_log10()
+    }
+  } else {
+    if (scale == "lin") {
+      p <- p +
+        geom_point(data = df, aes(x = mids, y = counts), color = 'blue', size = 1) +
+        geom_errorbar(data = df, aes(x = mids, ymin = counts - se, ymax = counts + se), color = 'red', width = 0.2, size = 0.5, alpha = 0.6)
+    } else {
+      p <- p +
+        geom_point(data = df, aes(x = mids, y = log10(counts)), color = 'blue', size = 1) +
+        geom_errorbar(data = df, aes(x = mids, ymin = log10(counts) - se, ymax = log10(counts) + se), color = 'red', width = 0.2, size = 0.5, alpha = 0.6)
+    }
+  }
+
+  if (!is.null(xlim)) {
+    p <- p + xlim(xlim)
+  }
+  if (!is.null(ylim)) {
+    p <- p + ylim(ylim)
+  }
+
+  p
+}
+
+fitting <- function(law, parms, data, xlab = expression(Delta * T ~ "[" * mu * "s" * "]"), scale = 'lin', ...) {
+  p <- plotdata(data, xlab = xlab, scale = scale, ...)
+  if (scale == 'lin') {
+    p <- p + geom_line(aes(x = data, y = law(data, parms)), size = 0.8, show.legend = FALSE)
+  } else if (scale == 'log') {
+    p <- p + geom_line(aes(x = data, y = log10(law(data, parms))), size = 0.8, show.legend = FALSE)
+  }
+  p
+}
+
+plot_posterior_param <- function(samples, param_name, stats, prior_func=NA, xlim=NULL, xlab=NULL,  legend.loc="topright", ...) {
+  dens <- density(samples)
+  
+  if(is.null(xlab))
+    xlab <- param_name
+
+  # Calculate the prior density if prior_func is provided
+  if(!is.na(prior_func)){
+    if(is.null(xlim)) {
+      x <- seq(min(samples), max(samples), length = 5000)
+    } else {
+      x <- seq(xlim[1], xlim[2], length = 5000)
+    }
+    y_prior <- prior_func(x)
+    max_prior <- max(y_prior)
+  } else {
+    max_prior <- 0
+  }
+
+  # Calculate the maximum y value for posterior and prior, then set ylim
+  max_posterior <- max(dens$y)
+  max_y <- max(max_posterior, max_prior) * 1.1
+
+  plot(dens, main = paste("Posterior Density of", param_name), xlab = xlab, ylab = "Probability Density", col = "skyblue", lwd = 2, xlim=xlim, ylim=c(0, max_y), ...)
+
+  # Overlay the prior density if prior_func is provided
+  if(!is.na(prior_func)){
+    lines(x, y_prior, col = "darkorange", lwd = 2, lty = 2)
+    
+    legend(legend.loc, legend = c(
+      paste("Mean =", round(stats$mean, 2)),
+      paste("SD =", round(stats$sd, 2)),
+      paste("2.5% CI =", round(stats$ci[1], 2)),
+      paste("97.5% CI =", round(stats$ci[2], 2)),
+      "Prior"
+      ), 
+      col = c("blue", 'lightblue', "red", "red", "darkorange"), lty = c(2, 2, 2, 2), lwd = 2, bty = "n"
+    )
+  } else {
+    legend(legend.loc, legend = c(
+      paste("Mean =", round(stats$mean, 2)),
+      paste("SD =", round(stats$sd, 2)),
+      paste("2.5% CI =", round(stats$ci[1], 2)),
+      paste("97.5% CI =", round(stats$ci[2], 2))
+      ), 
+      col = c("blue", 'lightblue', "red", "red"), lty = c(2, 2, 2), lwd = 2, bty = "n"
+    )
+  }
+  
+  abline(v = stats$mean, col = "blue", lwd = 2, lty = 2)
+  abline(v = stats$mean + stats$sd, col = "lightblue", lwd = 2, lty = 2)
+  abline(v = stats$mean - stats$sd, col = "lightblue", lwd = 2, lty = 2)
+  abline(v = stats$ci, col = "red", lwd = 2, lty = 2)
+}
+
+
+extract_stats <- function(summary_obj, param_name=NULL) {
+  if(is.null(param_name)){
+    list(
+      mean = summary_obj$statistics["Mean"],
+      sd = summary_obj$statistics["SD"],
+      ci = summary_obj$quantiles[c("2.5%", "97.5%")]
+    )
+  }
+  
+  else{
+    list(
+      mean = summary_obj$statistics[param_name, "Mean"],
+      sd = summary_obj$statistics[param_name, "SD"],
+      ci = summary_obj$quantiles[param_name, c("2.5%", "97.5%")]
+    )
+  }
+
+}
+
 ```
 
-## Data Loading
+```{r Default values}
+bins_default <- 120
+bins_lifetime <- 60
+
+# Named vector containing the moments for the priors
+prior_moments <- c( #like a dictionary
+  tau_mean = 2.1,    tau_var = 0.01^2,
+  alpha_mean = 0.06,  alpha_var = 0.01^2,
+  omega_mean = 4.77, omega_var = (4.77 * 0.04)^2 / 12,
+  delta_mean = 0,    delta_var = 0.32
+)
+
+# Named vector containing the parameters of the priors
+PriorParam <- list(
+  tau = getGammaParam(prior_moments[['tau_mean']], prior_moments[['tau_var']]),        #[[]] selects just the value, not the name
+  omega = getGammaParam(prior_moments[['omega_mean']], prior_moments[['omega_var']]),
+  delta = getBetaParam((prior_moments[['delta_mean']] + pi/2) / pi, prior_moments[['delta_var']] * pi^-2), #beta is in interval [0,1], so we dilatate and shift the parameters, then we'll reset the function
+  alpha = getBetaParam((prior_moments[['alpha_mean']] + 1/3) / (4/3), prior_moments[['alpha_var']] / (4/3)^2)
+)
+
+```
+
+## Data Loading and Filtering
 
 ```{r }
 # Read files
@@ -107,10 +266,7 @@ data_precession <- calibrate(data_precession)
 
 # Cleaning the dataset
 data_lifetime   <- data_lifetime[data_lifetime<8]
-data_precession <- data_precession[data_precession<6]
-cat('Length data_lifetime=',length(data_lifetime),'\n')
-cat('Length data_precession',length(data_precession))
-```
+data_precession <- data_precession[data_precession>1 & data_precession<7]
 
 ## Test
 
@@ -188,194 +344,166 @@ print(dominant_freqs[2:6])  # Print the top 5 dominant frequencies excluding the
 ## Lifetime Analysis 
 
 ```{r}
-zeros <- rep(0, length(data_lifetime))
-dataList <- list(x = data_lifetime, zeros=zeros)
+dataList <- list(x = data_lifetime)
+
+init_values <- list(list(tau = 2.2))
+
+n_burnin <- 5000  # Length of the burn-in phase
+thinning <- 2
+Nrep     <- 2000 # Number of values to simulate
+n_adapt  <- 1000
 
 # Write JAGS model
-modelString <- sprintf("
-  
-#model {
-#    for (i in 1:length(x)) {
-#      zeros[i] ~ dpois(zeros.mean[i])
-#      zeros.mean[i] <- -L[i]
-#      L[i] <- -x[i]/tau - log(tau)
-#    }
-#    tau ~ dunif(1.9,3)
-#}
-
-#model{
-#  for (i in 1:length(x)) {
-#    x[i] ~ dexp(1/tau)
-#  }
-
-  # Prior
-#  tau ~ dunif(1.9,3)
-#}
-
-model {
-
+model_lifetime_def <- sprintf("
+model{
   for (i in 1:length(x)) {
-      zeros[i] ~ dpois(zeros.mean[i])
-      zeros.mean[i] <- -L[i]
-      L[i] <- log((1-noise_signal)*(exp(-x[i]/tau)/tau) + noise_signal)
+    x[i] ~ dexp(1/tau)
   }
-  
-  noise_signal <- 0
+
   tau ~ dgamma(%.2f, %.2f)
 }", PriorParam$tau["alpha"], PriorParam$tau["beta"])
 
-# Save the model string to a file
-writeLines(modelString, con = "model.jags")
+model_lifetime <- jags.model(file = textConnection(model_lifetime_def), data = dataList, inits = init_values, n.chains = 1)
 
-```
-```{r}
-# Run the model
-jagsModel <- jags.model(file = "model.jags", 
-                        data = dataList, 
-                        n.chains = 1, 
-                        n.adapt = 100)
+# Adaptation phase
+adapt(model_lifetime, n_adapt)
 
-#variable.names= c('tau','tau_minus', 'fraction')
-jagsSamples <- coda.samples(model = jagsModel, 
-                            variable.names= c('noise_signal', 'tau'), 
-                            n.iter = 500)
+# Burn-in phase
+update(model_lifetime, n.iter = n_burnin)
 
-# Summarize and inspect results
-parms <- summary(jagsSamples)$statistics[,'Mean']
+# Sample from the posterior
+posterior_lifetime <- coda.samples(model_lifetime, variable.names = c('tau'), n.iter = Nrep, thin = thinning)
+(summary_lifetime <- summary(posterior_lifetime))
+plot(posterior_lifetime)
 
-summary(jagsSamples)
-```
-
-```{r plot-jags, fig.width=10, fig.height=8}
-#X11(width = 10, height = 8)
-
-plot(jagsSamples)
-```
-
-```{r}
-posterior_matrix <- as.matrix(jagsSamples)
+posterior_matrix <- as.matrix(posterior_lifetime)
 
 # Retrieve the chains
 tau_samples <- posterior_matrix[, "tau"]
-
-par(mfrow = c(3, 2))
-
 
 acf(tau_samples, main = "Autocorrelation of tau")
 ```
 
 
-## Precession
+```{r }
+tau_stats <- extract_stats(summary_lifetime)
 
-```{r}
-# Load required libraries
-install.packages("rjags")
-library(rjags)
-library(ggplot2)
-library(bayesplot)
-
-# Read data from files
-read_data_from_files <- function(directory) {
-  files <- list.files(directory, pattern = "\\.dat$", full.names = TRUE)
-  all_data <- numeric()
-  for (file in files) {
-    data <- scan(file, quiet = TRUE)
-    all_data <- c(all_data, data)
-  }
-  return(all_data)
+prior_tau <- function(x) {
+  dgamma(x, shape = PriorParam$tau[["alpha"]], rate = PriorParam$tau[["beta"]])
 }
 
-# Directory containing the data files
-data_directory <- "/home/ema/Desktop/Documents/GitHub/MuonLifetimeBayesianAnalysis/g-2data/data/precession/2023_24"
+plot_posterior_param(tau_samples, "tau", tau_stats, prior_tau, xlim=c(2.03,2.23), xlab=expression(tau ~ "[" * mu * "s" * "]"), legend.loc="topleft")
 
-# Read the data
-t_data <- read_data_from_files(data_directory)
+```
 
-# Calibration and filtering
-t_data <- (14.90 * t_data + 7.4) * 1e-3  # Apply calibration
-t_data <- t_data[(t_data > 1) & (t_data < 7)]  # Filter data
+## Precession Analysis
 
-# Prepare the data for JAGS
-jags_data <- list(
-  t_data = t_data,
-  N = length(t_data),
-  zeros = rep(0, length(t_data))
+```{r }
+tau_lifetime_posterior <- getGammaParam(summary_lifetime$statistics[['Mean']] ,summary_lifetime$statistics[['SD']])
+
+```
+
+```{r}
+
+dataList = list(x = data_precession, zeros = rep(0, length(data_precession)), tau=summary_lifetime$statistics['Mean'])
+
+init_values <- list(
+  list(delta_base = 0.4, omega = 4.7, alpha_base = 0.05)
 )
 
-# Write the JAGS model to a file
-model_string <- "
+n_burnin <- 3000  # Length of the burn-in phase
+thinning <- 1
+Nrep     <- 5000 # Number of values to simulate
+n_adapt  <- 1000
+
+model_precession_def <- sprintf("
 model {
   for (i in 1:N) {
     zeros[i] ~ dpois(zeros.mean[i])
     zeros.mean[i] <- -L[i]
-    L[i] <- -t_data[i] / tau + log(1 + alfa * cos(omega * t_data[i] + delta)) - log(tau) - log(FACTOR)
+    L[i] <- -x[i]/tau + log(1+alpha*cos(omega*x[i]+delta)) - log(tau) - log(FACTOR)
   }
   
-  tau ~ dunif(1.9, 3)
-  delta ~ dunif(-3.14, 3.14)
-  omega ~ dunif(4.2, 5.2)
-  alfa ~ dunif(0, 1)
+  delta_base ~ dbeta(%.2f, %.2f) 
+  omega ~ dgamma(%.2f, %.2f)
+  alpha_base ~ dbeta(%.2f, %.2f) 
+  #tau ~ dgamma(%.2f, %.2f)
   
-  FACTOR <- 1 + alfa / (1 + tau^2 * omega^2) * (cos(delta) - tau * omega * sin(delta))
+  delta <- delta_base * 3.14 - 3.14/2
+  alpha <- alpha_base * 4/3 - 1/3
+  
+  g <- 0.41986*omega
+  
+  FACTOR <- 1 + alpha/(1+tau^2*omega^2) * (cos(delta)-tau*omega*sin(delta))
 }
-"
-writeLines(model_string, con = "model_precession.txt")
+", PriorParam$delta["alpha"], PriorParam$delta["beta"], 
+   PriorParam$omega["alpha"], PriorParam$omega["beta"],  
+   PriorParam$alpha["alpha"], PriorParam$alpha["beta"], 
+   tau_lifetime_posterior["alpha"], tau_lifetime_posterior["beta"])
 
-# Initial values for the parameters
-inits <- function() {
-  list(tau = runif(1, 1.9, 3), delta = runif(1, -3.14, 3.14), omega = runif(1, 4.2, 5.2), alfa = runif(1, 0, 1))
-}
 
-# Parameters to monitor
-parameters <- c("tau", "delta", "omega", "alfa")
+# Create the model
+model_precession <- jags.model(file = textConnection(model_precession_def), data = dataList, n.chains = 1)
 
-# Model
-model <- jags.model("model_precession.txt", data = jags_data, inits = inits, n.chains = 3, n.adapt = 1000)
+# Adaptation phase
+adapt(model_precession, n_adapt)
 
-# Burn-in
-update(model, 1000)
+# Burn-in phase
+update(model_precession, n.iter = n_burnin)
 
-# MCMC
-samples <- coda.samples(model, variable.names = parameters, n.iter = 10000)
 
-# Summarize the results
-summary(samples)
+# Sample from the posterior
+posterior_precession <- coda.samples(model_precession, variable.names = c('delta', 'omega', 'alpha', 'tau', 'g','FACTOR'), n.iter = Nrep, thin = thinning)
+summary_precession <- summary(posterior_precession)
+posterior_matrix <- as.matrix(posterior_precession)
 
-# Extract the parameter estimates
-mcmc_results <- as.data.frame(do.call(rbind, samples))
-
-# Summary of MCMC results
-print(summary(mcmc_results))
-
-# Plot the posterior distributions
-mcmc_trace(samples)
-mcmc_hist(samples)
-
-# Extract the means of the fitted parameters
-tau_fitted <- mean(mcmc_results$tau)
-delta_fitted <- mean(mcmc_results$delta)
-omega_fitted <- mean(mcmc_results$omega)
-alfa_fitted <- mean(mcmc_results$alfa)
-
-cat(sprintf("Fitted parameters: tau = %f, delta = %f, omega = %f, alfa = %f\n", tau_fitted, delta_fitted, omega_fitted, alfa_fitted))
-
-# Create data frame for the fitted PDF
-t_values <- seq(min(t_data), max(t_data), length.out = 1000)
-fitted_pdf <- function(t) {
-  exp(-t / tau_fitted) * (1 + alfa_fitted * cos(omega_fitted * t + delta_fitted))
-}
-fitted_pdf_values <- fitted_pdf(t_values)
-fitted_pdf_data <- data.frame(t = t_values, density = fitted_pdf_values)
-
-# Create a histogram and plot the fitted PDF
-hist_data <- data.frame(t = t_data)
-ggplot(hist_data, aes(x = t)) +
-  geom_histogram(aes(y = ..density..), bins = 30, fill = "blue", alpha = 0.6) +
-  geom_line(data = fitted_pdf_data, aes(x = t, y = density), color = "red", size = 1) +
-  labs(x = "Time (t)", y = "Probability Density") +
-  theme_minimal()
+# Retrieve the chains
+delta_samples <- posterior_matrix[, "delta"]
+omega_samples <- posterior_matrix[, "omega"]
+alpha_samples <- posterior_matrix[, "alpha"]
+tau_samples <- posterior_matrix[, "tau"]
+g_samples <- posterior_matrix[, "g"]
 
 ```
+
+
 ```{r , fig.width=10, fig.height=8}
-plot(posterior_sample)
+plot(posterior_precession)
+
+par(mfrow = c(2, 2))
+
+acf(delta_samples, main = "Autocorrelation of delta")
+acf(omega_samples, main = "Autocorrelation of omega")
+acf(alpha_samples, main = "Autocorrelation of alpha")
+acf(g_samples, main = "Autocorrelation of g")
 ```
+
+```{r }
+# Extract statistics for each parameter
+delta_stats <- extract_stats(summary_precession, "delta")
+omega_stats <- extract_stats(summary_precession, "omega")
+alpha_stats <- extract_stats(summary_precession, "alpha")
+g_stats <- extract_stats(summary_precession, "g")
+
+# Define the prior functions for new parameters
+prior_delta <- function(x) {
+  dbeta((x + 3.14/2) / 3.14, shape1 = PriorParam$delta["alpha"], shape2 = PriorParam$delta["beta"]) / 3.14
+}
+
+prior_omega <- function(x) {
+  dgamma(x, shape = PriorParam$omega["alpha"], rate = PriorParam$omega["beta"])
+}
+
+prior_alpha <- function(x) {
+  dbeta((x + 1/3) * 3 / 4, shape1 = PriorParam$alpha["alpha"], shape2 = PriorParam$alpha["beta"]) * 3 / 4
+}
+
+# Plotting posterior parameters with priors
+#par(mfrow = c(5, 1))  # Set up the plotting area for 5 plots vertically
+
+plot_posterior_param(delta_samples, "delta", delta_stats, prior_delta, xlab = expression(delta ~ '[rad]'))
+plot_posterior_param(omega_samples, "omega", omega_stats, prior_omega, xlab = expression(omega ~ '[MHz]' ))
+plot_posterior_param(alpha_samples, "alpha", alpha_stats, prior_alpha, xlab = expression(alpha))
+plot_posterior_param(g_samples, "g", g_stats, xlab=expression('g' * mu))
+```
+
