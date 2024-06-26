@@ -1,0 +1,144 @@
+---
+title: "test"
+author: "Emanuele Coradin"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+# Load required libraries
+#install.packages("rjags")
+library(rjags)
+library(ggplot2)
+library(bayesplot)
+
+# Define the PDF function with fixed tau
+pdf <- function(t, a, b, c, tau = 2.2) {
+  exp(-t / tau) * (1 + a * cos(b * t + c))
+}
+
+# Define the normalization constant function with fixed tau
+normalization_constant <- function(a, b, c, t_min, t_max, tau = 2.2) {
+  integrate(function(t) pdf(t, a, b, c, tau), t_min, t_max)$value
+}
+
+# Read data from files
+read_data_from_files <- function(directory) {
+  files <- list.files(directory, pattern = "\\.dat$", full.names = TRUE)
+  all_data <- numeric()
+  for (file in files) {
+    data <- scan(file, quiet = TRUE)
+    all_data <- c(all_data, data)
+  }
+  return(all_data)
+}
+
+# Directory containing the data files
+data_directory <- "/home/ema/Desktop/Documents/GitHub/MuonLifetimeBayesianAnalysis/g-2data/data/precession/2023_24"
+
+# Read the data
+t_data <- read_data_from_files(data_directory)
+
+# Calibration and filtering
+t_data <- (14.90 * t_data + 7.4) * 1e-3  # Apply calibration
+t_data <- t_data[(t_data > 1) & (t_data < 7)]  # Filter data
+
+# Write the JAGS model to a file
+model_string <- "
+model {
+  for (i in 1:N) {
+    t_data[i] ~ dnorm(mu[i], tau_y)
+    mu[i] <- exp(-t[i] / tau_fixed) * (1 + a * cos(b * t[i] + c))
+  }
+
+  # Priors
+  a ~ dunif(-1/3, 1)
+  b ~ dunif(4, 6)
+  c ~ dunif(-3.14/2, 3.14/2)
+  tau_y ~ dgamma(0.001, 0.001) # Precision of the normal distribution (inverse of variance)
+}
+"
+writeLines(model_string, con = "model.txt")
+
+# JAGS data
+jags_data <- list(
+  t_data = t_data,
+  N = length(t_data),
+  t = seq(min(t_data), max(t_data), length.out = length(t_data)),
+  tau_fixed = 2.2
+)
+
+# Initial values for the parameters
+inits <- function() {
+  list(a = runif(1, -1/3, 1), b = runif(1, 4, 6), c = runif(1, -pi, pi), tau_y = rgamma(1, 0.001, 0.001))
+}
+
+# Parameters to monitor
+parameters <- c("a", "b", "c")
+
+# Model
+model <- jags.model("model.txt", data = jags_data, inits = inits, n.chains = 3, n.adapt = 1000)
+
+# Burn-in
+update(model, 1000)
+
+# MCMC
+samples <- coda.samples(model, variable.names = parameters, n.iter = 10000)
+
+# Summarize the results
+summary(samples)
+
+# Extract the parameter estimates
+mcmc_results <- as.data.frame(do.call(rbind, samples))
+
+# Summary of MCMC results
+print(summary(mcmc_results))
+
+# Plot the posterior distributions
+mcmc_trace(samples)
+mcmc_hist(samples)
+
+# Extract the means of the fitted parameters
+a_fitted <- mean(mcmc_results$a)
+b_fitted <- mean(mcmc_results$b)
+c_fitted <- mean(mcmc_results$c)
+
+cat(sprintf("Fitted parameters: tau = 2.2 (fixed), a = %f, b = %f, c = %f\n", a_fitted, b_fitted, c_fitted))
+
+# Create data frame for the fitted PDF
+t_values <- seq(min(t_data), max(t_data), length.out = 1000)
+fitted_pdf <- function(t) {
+  exp(-t / 2.2) * (1 + a_fitted * cos(b_fitted * t + c_fitted))
+}
+fitted_pdf_values <- fitted_pdf(t_values)
+fitted_pdf_data <- data.frame(t = t_values, density = fitted_pdf_values)
+
+# Create a histogram and plot the fitted PDF
+hist_data <- data.frame(t = t_data)
+ggplot(hist_data, aes(x = t)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "blue", alpha = 0.6) +
+  geom_line(data = fitted_pdf_data, aes(x = t, y = density), color = "red", size = 1) +
+  labs(x = "Time (t)", y = "Probability Density") +
+  theme_minimal()
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

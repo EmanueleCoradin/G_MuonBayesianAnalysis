@@ -1,0 +1,16 @@
+
+model {
+  for (i in 1:N) {
+    zeros[i] ~ dpois(zeros.mean[i])
+    zeros.mean[i] <- -L[i]
+    L[i] <- -t_data[i] / tau + log(1 + alfa * cos(omega * t_data[i] + delta)) - log(tau) - log(FACTOR)
+  }
+  
+  tau ~ dunif(1.9, 3)
+  delta ~ dunif(-3.14, 3.14)
+  omega ~ dunif(4.2, 5.2)
+  alfa ~ dunif(0, 1)
+  
+  FACTOR <- 1 + alfa / (1 + tau^2 * omega^2) * (cos(delta) - tau * omega * sin(delta))
+}
+
