@@ -31,7 +31,6 @@ color_vector <- c("#CC0000",   # Dark red
 library(rjags)
 library(ggplot2)
 library(dplyr)
-library(rstan)
 library(ggplot2)
 
 ```
@@ -267,30 +266,34 @@ data_lifetime   <- calibrate(data_lifetime)
 data_precession <- calibrate(data_precession)
 
 # Cleaning the dataset
-data_lifetime   <- data_lifetime[data_lifetime<8]
+#data_lifetime   <- data_lifetime[data_lifetime<8]
 #data_precession <- data_precession[data_precession>1 & data_precession<7]
 
 ```
-
+```{r }
+max(data_lifetime)
+```
 ## Lifetime Analysis 
 
 ```{r}
-dataList <- list(x = data_lifetime)
+dataList <- list(x = data_lifetime, zeros = rep(0, length(data_lifetime)))
 
-init_values <- list(list(tau = 2.2))
+init_values <- list(list(tau = 2.2, a = 0.999))
 
-n_burnin <- 2000 # Length of the burn-in phase
-thinning <- 1
-Nrep     <- 10000 # Number of values to simulate
-n_adapt  <- 1000
+n_burnin <- 5000 # Length of the burn-in phase
+thinning <- 2
+Nrep     <- 15000 # Number of values to simulate
+n_adapt  <- 3000
 
 # Write JAGS model
 model_lifetime_def <- sprintf("
 model{
   for (i in 1:length(x)) {
-    x[i] ~ dexp(1/tau)
+    zeros[i] ~ dpois(zeros.mean[i])
+    zeros.mean[i] <- -L[i]
+    L[i] <- log(a*exp(-x[i]/tau)/tau + (1-a)* exp(-x[i]/100)/100 )
   }
-
+  a ~   dunif(0, 1)
   tau ~ dgamma(%.2f, %.2f)
 }", PriorParam$tau["alpha"], PriorParam$tau["beta"])
 
@@ -303,7 +306,7 @@ adapt(model_lifetime, n_adapt)
 update(model_lifetime, n.iter = n_burnin)
 
 # Sample from the posterior
-posterior_lifetime <- coda.samples(model_lifetime, variable.names = c('tau'), n.iter = Nrep, thin = thinning)
+posterior_lifetime <- coda.samples(model_lifetime, variable.names = c('tau', 'a'), n.iter = Nrep, thin = thinning)
 (summary_lifetime <- summary(posterior_lifetime))
 #plot(posterior_lifetime)
 
@@ -311,191 +314,45 @@ posterior_matrix <- as.matrix(posterior_lifetime)
 
 # Retrieve the chains
 tau_samples <- posterior_matrix[, "tau"]
+a_samples <- posterior_matrix[, "a"]
 
 acf(tau_samples, main = "Autocorrelation of tau")
+acf(a_samples, main = "Autocorrelation of a")
 ```
-
-## Liferime Analysis Rstan
 
 ```{r}
-dataList <- list(N = length(data_lifetime), x = data_lifetime)
-
-# Define initial values
-init_values <- list(tau = 2.2, a=0.99)
-
-# Save the Stan model to a file
-stan_model_code <- "
-data {
-  int<lower=0> N;      // Number of observations
-  real<lower=0> x[N];  // Observations
-}
-
-parameters {
-  real<lower=0> tau;   // Parameter of interest
-  real<lower=0.9, upper=1> a; 
-}
-
-model {
-  // Priors
-  tau ~ gamma(%f, %f);
-
-  // Likelihood with multiplicative additional term
-  for (i in 1:N) {
-    target += a* exponential_lpdf(x[i] | 1 / tau) + (1-a) * exponential_lpdf(x[i] | 1 / 100);
-  }
-}
-"
-write(sprintf(stan_model_code, PriorParam$tau["alpha"], PriorParam$tau["beta"]), file = "model_lifetime.stan")
-
-# Fit the model
-fit <- stan(file = "model_lifetime.stan", data = dataList, init = list(init_values), chains = 1, iter = 100, warmup = 10, thin = 1)
-
-# Print the summary of the fitted model
-print(fit)
-```
-
-```{r }
-tau_stats <- extract_stats(summary_lifetime)
+tau_stats <- extract_stats(summary_lifetime, "tau")
+a_stats <- extract_stats(summary_lifetime, "a")
 
 prior_tau <- function(x) {
   dgamma(x, shape = PriorParam$tau[["alpha"]], rate = PriorParam$tau[["beta"]])
 }
 
+plot_posterior_param(a_samples, "a", a_stats)
 plot_posterior_param(tau_samples, "tau", tau_stats, prior_tau, xlab=expression(tau ~ "[" * mu * "s" * "]"), legend.loc="topleft")
 
+tau_stats
 ```
 
-## Precession Analysis
+## Precession Analysis 
 
 ```{r}
-tau_lifetime_posterior <- getGammaParam(summary_lifetime$statistics[['Mean']] ,summary_lifetime$statistics[['SD']])
+tau_lifetime_posterior <- getGammaParam(summary_lifetime$statistics[['tau', 'Mean']] ,summary_lifetime$statistics[['tau', 'SD']])
 
 ```
 
 ```{r}
 
-dataList = list(x = data_precession, zeros = rep(0, length(data_precession)), tau=summary_lifetime$statistics['Mean'])
+dataList = list(x = data_precession, zeros = rep(0, length(data_precession)), tau=summary_lifetime$statistics[['tau', 'Mean']])
 
 init_values <- list(
-  list(delta_base = 0.4, omega = 4.7, alpha_base = 0.05)
+  list(delta_base = 0.4, omega = 4.7, alpha_base = 0.05, a=0.99995)
 )
 
-n_burnin <- 200  # Length of the burn-in phase
-thinning <- 1
-Nrep     <- 500 # Number of values to simulate
-n_adapt  <- 100
-
-model_precession_def <- sprintf("
-model {
-  for (i in 1:length(x)) {
-    zeros[i] ~ dpois(zeros.mean[i])
-    zeros.mean[i] <- -L[i]
-    L[i] <- -x[i]/tau + log(1+alpha*cos(omega*x[i]+delta)) - log(tau) - log(FACTOR)
-  }
-  
-  delta_base ~ dbeta(%.2f, %.2f) 
-  omega ~ dgamma(%.2f, %.2f)
-  alpha_base ~ dbeta(%.2f, %.2f) 
-  #tau ~ dgamma(%.2f, %.2f)
-  
-  delta <- delta_base * 3.14 - 3.14/2
-  alpha <- alpha_base * 4/3 - 1/3
-  
-  g <- 0.41986*omega
-  
-  FACTOR <- 1 + alpha/(1+tau^2*omega^2) * (cos(delta)-tau*omega*sin(delta))
-}
-", PriorParam$delta["alpha"], PriorParam$delta["beta"], 
-   PriorParam$omega["alpha"], PriorParam$omega["beta"],  
-   PriorParam$alpha["alpha"], PriorParam$alpha["beta"], 
-   tau_lifetime_posterior["alpha"], tau_lifetime_posterior["beta"])
-
-
-# Create the model
-model_precession <- jags.model(file = textConnection(model_precession_def), data = dataList, n.chains = 1)
-
-# Adaptation phase
-adapt(model_precession, n_adapt)
-
-# Burn-in phase
-update(model_precession, n.iter = n_burnin)
-
-
-# Sample from the posterior
-posterior_precession <- coda.samples(model_precession, variable.names = c('delta', 'omega', 'alpha', 'tau', 'g','FACTOR'), n.iter = Nrep, thin = thinning)
-summary_precession <- summary(posterior_precession)
-posterior_matrix <- as.matrix(posterior_precession)
-
-# Retrieve the chains
-delta_samples <- posterior_matrix[, "delta"]
-omega_samples <- posterior_matrix[, "omega"]
-alpha_samples <- posterior_matrix[, "alpha"]
-tau_samples <- posterior_matrix[, "tau"]
-g_samples <- posterior_matrix[, "g"]
-
-```
-
-
-```{r}
-plot(posterior_precession)
-
-par(mfrow = c(2, 2))
-
-acf(delta_samples, main = "Autocorrelation of delta")
-acf(omega_samples, main = "Autocorrelation of omega")
-acf(alpha_samples, main = "Autocorrelation of alpha")
-acf(g_samples, main = "Autocorrelation of g")
-```
-
-```{r, eval=FALSE }
-# Extract statistics for each parameter
-delta_stats <- extract_stats(summary_precession, "delta")
-omega_stats <- extract_stats(summary_precession, "omega")
-alpha_stats <- extract_stats(summary_precession, "alpha")
-g_stats <- extract_stats(summary_precession, "g")
-
-# Define the prior functions for new parameters
-prior_delta <- function(x) {
-  dbeta((x + 3.14/2) / 3.14, shape1 = PriorParam$delta["alpha"], shape2 = PriorParam$delta["beta"]) / 3.14
-}
-
-prior_omega <- function(x) {
-  dgamma(x, shape = PriorParam$omega["alpha"], rate = PriorParam$omega["beta"])
-}
-
-prior_alpha <- function(x) {
-  dbeta((x + 1/3) * 3 / 4, shape1 = PriorParam$alpha["alpha"], shape2 = PriorParam$alpha["beta"]) * 3 / 4
-}
-
-# Plotting posterior parameters with priors
-#par(mfrow = c(5, 1))  # Set up the plotting area for 5 plots vertically
-
-plot_posterior_param(delta_samples, "delta", delta_stats, prior_delta, xlab = expression(delta ~ '[rad]'))
-plot_posterior_param(omega_samples, "omega", omega_stats, prior_omega, xlab = expression(omega ~ '[MHz]' ))
-plot_posterior_param(alpha_samples, "alpha", alpha_stats, prior_alpha, xlab = expression(alpha))
-plot_posterior_param(g_samples, "g", g_stats, xlab=expression('g' * mu))
-```
-
-
-## Precession Analysis including noise
-
-```{r}
-tau_lifetime_posterior <- getGammaParam(summary_lifetime$statistics[['Mean']] ,summary_lifetime$statistics[['SD']])
-
-```
-
-```{r}
-
-dataList = list(x = data_precession, zeros = rep(0, length(data_precession)), tau=summary_lifetime$statistics['Mean'])
-
-init_values <- list(
-  list(delta_base = 0.4, omega = 4.7, alpha_base = 0.05, a=0.99)
-)
-
-n_burnin <- 5000  # Length of the burn-in phase
+n_burnin <- 1000  # Length of the burn-in phase
 thinning <- 2
 Nrep     <- 15000 # Number of values to simulate
-n_adapt  <- 3000
+n_adapt  <- 5000
 
 model_precession_def <- sprintf("
 model {
@@ -508,7 +365,7 @@ model {
   delta_base ~ dbeta(%.2f, %.2f) 
   omega ~ dgamma(%.2f, %.2f)
   alpha_base ~ dbeta(%.2f, %.2f) 
-  a ~ dunif(0.9,1)
+  a ~ dunif(0.9, 1)
   #tau ~ dgamma(%.2f, %.2f)
   
   delta <- delta_base * 3.14 - 3.14/2
